@@ -1,0 +1,1 @@
+.DS_Store rm -r --cached .firebase
