@@ -266,6 +266,22 @@
     box-shadow:0 10px 30px rgba(0,0,0,.25);z-index:100;
   }
   .assign-box{background:var(--cream);border-radius:10px;padding:14px;margin-top:12px;}
+
+  /* ---------- QR / Modal (embarquement + paiement) ---------- */
+  .btn-qr{background:var(--night);color:var(--cream);border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  .btn-qr:hover{background:var(--night-2);}
+  .tt-modal-overlay{position:fixed;inset:0;background:rgba(11,61,36,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:18px;}
+  .tt-modal{background:var(--paper);border-radius:16px;max-width:360px;width:100%;padding:22px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.3);position:relative;}
+  .tt-modal h3{margin:0 0 4px;font-size:18px;}
+  .tt-modal p.sub{color:var(--ink-soft);font-size:12.5px;margin:0 0 16px;}
+  .tt-modal-close{position:absolute;top:10px;right:10px;background:none;border:none;font-size:18px;color:var(--ink-soft);cursor:pointer;line-height:1;}
+  .tt-qr-wrap{display:flex;justify-content:center;margin-bottom:14px;}
+  .tt-qr-wrap canvas, .tt-qr-wrap img{border-radius:8px;background:#fff;padding:8px;}
+  .tt-qr-code{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);letter-spacing:.04em;margin-bottom:10px;}
+  .tt-cam-wrap{position:relative;width:100%;aspect-ratio:1/1;background:#000;border-radius:12px;overflow:hidden;margin-bottom:14px;}
+  .tt-cam-wrap video{width:100%;height:100%;object-fit:cover;}
+  .tt-cam-hint{font-size:12px;color:var(--ink-soft);margin-bottom:14px;}
+  .tt-cam-frame{border:3px solid var(--gold);border-radius:14px;position:absolute;inset:14%;pointer-events:none;box-shadow:0 0 0 2000px rgba(0,0,0,.35);}
 </style>
 </head>
 <body>
@@ -275,6 +291,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 
 <script>
 /* =========================================================
@@ -1226,6 +1244,182 @@ function busLogo(size, color){
     <circle cx="14" cy="35" r="4" fill="#1D2420"/>
     <circle cx="34" cy="35" r="4" fill="#1D2420"/>
   </svg>`;
+}
+
+/* =========================================================
+   QR CODE — ticket d'embarquement + partage du lien de paiement
+   Repris et adapté du système QR de TataPay :
+   - le client affiche un QR encodant "terangatrans://resa/<id>"
+     qu'il montre au chauffeur (ou à l'admin) à l'embarquement ;
+   - un QR peut aussi être généré pour le lien de paiement (Wave/OM)
+     afin qu'il soit scanné avec un autre téléphone ;
+   - le chauffeur peut scanner ce QR via la caméra pour vérifier
+     la réservation avant de démarrer le trajet.
+========================================================= */
+function renderQR(elId, text, size){
+  size = size || 190;
+  const el = document.getElementById(elId);
+  if(!el) return;
+  el.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  canvas.style.cssText = `width:${size}px;height:${size}px;display:block;`;
+  el.appendChild(canvas);
+  function fallbackImg(){
+    el.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}&ecc=M&margin=8" width="${size}" height="${size}" style="border-radius:8px;display:block;" onerror="this.parentNode.innerHTML='<div style=&quot;color:#c00;font-size:12px;padding:16px;&quot;>QR indisponible (hors-ligne)</div>'"/>`;
+  }
+  if(window.QRCode && QRCode.toCanvas){
+    QRCode.toCanvas(canvas, text, {width:size, margin:2, errorCorrectionLevel:'M'}, (err)=>{
+      if(err){ console.warn('[renderQR] échec génération locale', err); fallbackImg(); }
+    });
+  } else {
+    fallbackImg();
+  }
+}
+
+function openModal(html){
+  closeModal();
+  const overlay = document.createElement('div');
+  overlay.className = 'tt-modal-overlay';
+  overlay.id = 'ttModalOverlay';
+  overlay.innerHTML = `<div class="tt-modal">${html}</div>`;
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeModal(); });
+  document.body.appendChild(overlay);
+}
+
+function closeModal(){
+  stopTicketScanCamera();
+  const el = document.getElementById('ttModalOverlay');
+  if(el) el.remove();
+}
+
+/* QR d'embarquement, affiché côté client (et rappel côté chauffeur) */
+function openTicketQR(resId){
+  const r = state.reservations.find(x=>x.id===resId);
+  if(!r) return;
+  const payload = `terangatrans://resa/${resId}`;
+  openModal(`
+    <button class="tt-modal-close" onclick="closeModal()">✕</button>
+    <h3>🎫 Ticket d'embarquement</h3>
+    <p class="sub">${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}${r.dateEvenement ? ' • ' + new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : ''}</p>
+    <div class="tt-qr-wrap" id="ttTicketQRWrap"></div>
+    <div class="tt-qr-code">#${resId.slice(0,6).toUpperCase()}</div>
+    <p class="sub" style="margin-bottom:0;">Présente ce QR code au chauffeur à l'embarquement pour qu'il vérifie ta réservation.</p>
+  `);
+  setTimeout(()=>renderQR('ttTicketQRWrap', payload, 190), 30);
+}
+
+/* QR pour le lien de paiement Wave/Orange Money, pour paiement à distance */
+function openPaymentQR(resId){
+  const r = state.reservations.find(x=>x.id===resId);
+  if(!r || !r.lienPaiement) return;
+  openModal(`
+    <button class="tt-modal-close" onclick="closeModal()">✕</button>
+    <h3>📱 Payer par QR code</h3>
+    <p class="sub">Fais scanner ce QR avec un autre téléphone (Wave, Orange Money…) pour régler cette réservation à ta place.</p>
+    <div class="tt-qr-wrap" id="ttPayQRWrap"></div>
+    <p class="sub" style="margin-bottom:14px;">Montant : <b>${r.prix ? esc(r.prix)+' FCFA' : '—'}</b></p>
+    <a href="${esc(r.lienPaiement)}" target="_blank" rel="noopener" class="btn-qr" style="text-decoration:none;">Ouvrir le lien de paiement</a>
+  `);
+  setTimeout(()=>renderQR('ttPayQRWrap', r.lienPaiement, 190), 30);
+}
+
+/* ---------- Scan caméra du QR d'embarquement (côté chauffeur) ---------- */
+let ttScanState = {stream:null, scanning:false, video:null, canvas:null, ctx:null, detector:null};
+
+function openScanTicket(){
+  openModal(`
+    <button class="tt-modal-close" onclick="closeModal()">✕</button>
+    <h3>📷 Scanner un ticket</h3>
+    <p class="sub">Scanne le QR d'embarquement du passager pour vérifier sa réservation.</p>
+    <div class="tt-cam-wrap"><video id="ttScanVideo" playsinline autoplay muted></video><div class="tt-cam-frame"></div></div>
+    <p class="tt-cam-hint" id="ttScanHint">Positionne le QR dans le cadre…</p>
+  `);
+  startTicketScanCamera();
+}
+
+async function startTicketScanCamera(){
+  const video = document.getElementById('ttScanVideo');
+  if(!video) return;
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
+    ttScanState.stream = stream;
+    video.srcObject = stream;
+    await video.play();
+    ttScanState.video = video;
+    ttScanState.scanning = true;
+    if('BarcodeDetector' in window){
+      try{ ttScanState.detector = new BarcodeDetector({formats:['qr_code']}); }catch(e){ ttScanState.detector = null; }
+    }
+    if(!ttScanState.canvas){
+      ttScanState.canvas = document.createElement('canvas');
+      ttScanState.ctx = ttScanState.canvas.getContext('2d', {willReadFrequently:true});
+    }
+    ticketScanLoop();
+  }catch(e){
+    console.warn('[startTicketScanCamera] échec accès caméra', e);
+    const hint = document.getElementById('ttScanHint');
+    if(hint) hint.textContent = "⚠️ Impossible d'accéder à la caméra. Vérifie les permissions.";
+  }
+}
+
+function stopTicketScanCamera(){
+  ttScanState.scanning = false;
+  if(ttScanState.stream){ ttScanState.stream.getTracks().forEach(t=>t.stop()); ttScanState.stream = null; }
+  ttScanState.video = null;
+}
+
+function ticketScanLoop(){
+  if(!ttScanState.scanning) return;
+  const video = ttScanState.video;
+  if(!video || video.readyState !== video.HAVE_ENOUGH_DATA){ requestAnimationFrame(ticketScanLoop); return; }
+  if(ttScanState.detector){
+    ttScanState.detector.detect(video).then(codes=>{
+      if(codes && codes.length){ handleTicketScan(codes[0].rawValue); return; }
+      scanWithJsQRFallback(video);
+    }).catch(()=>scanWithJsQRFallback(video));
+  } else {
+    scanWithJsQRFallback(video);
+  }
+}
+
+function scanWithJsQRFallback(video){
+  if(!ttScanState.scanning) return;
+  if(typeof jsQR === 'function'){
+    const w = video.videoWidth, h = video.videoHeight;
+    if(w && h){
+      ttScanState.canvas.width = w; ttScanState.canvas.height = h;
+      ttScanState.ctx.drawImage(video, 0, 0, w, h);
+      try{
+        const img = ttScanState.ctx.getImageData(0, 0, w, h);
+        const code = jsQR(img.data, w, h, {inversionAttempts:'dontInvert'});
+        if(code && code.data){ handleTicketScan(code.data); return; }
+      }catch(e){}
+    }
+  }
+  requestAnimationFrame(ticketScanLoop);
+}
+
+function handleTicketScan(raw){
+  ttScanState.scanning = false;
+  const m = (raw||'').trim().match(/terangatrans:\/\/resa\/(.+)/i);
+  if(!m){ showToast("QR invalide : ce n'est pas un ticket Teranga Trans."); ttScanState.scanning = true; requestAnimationFrame(ticketScanLoop); return; }
+  const resId = m[1];
+  const r = state.reservations.find(x=>x.id===resId);
+  closeModal();
+  if(!r){ showToast('Réservation introuvable.'); return; }
+  if(r.chauffeurId && state.user && r.chauffeurId !== state.user.uid){
+    showToast("⚠️ Ce ticket n'est pas assigné à ton trajet.");
+    return;
+  }
+  openModal(`
+    <button class="tt-modal-close" onclick="closeModal()">✕</button>
+    <h3>✅ Ticket vérifié</h3>
+    <p class="sub" style="margin-bottom:14px;">${esc(r.clientNom||'')} • ${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}</p>
+    <div class="tt-qr-code" style="margin-bottom:16px;">#${resId.slice(0,6).toUpperCase()} • ${STATUS_LABELS[r.statut]||r.statut}</div>
+    ${r.statut==='confirmee' ? `<button class="btn-qr" style="width:100%;justify-content:center;" onclick="closeModal();document.querySelector('[data-start-trip=\\'${resId}\\']')?.click();">Démarrer le trajet</button>` : ``}
+    ${r.statut==='en_route' ? `<button class="btn-qr" style="width:100%;justify-content:center;" onclick="closeModal();document.querySelector('[data-finish-trip=\\'${resId}\\']')?.click();">Marquer terminé</button>` : ``}
+  `);
 }
 
 /* ---------- Détection de conflit bus/chauffeur (même date) ---------- */
