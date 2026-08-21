@@ -125,6 +125,20 @@
   .role-choice input{display:none;}
   .role-choice input:checked + span{color:var(--night);}
   .role-choice label:has(input:checked){border-color:var(--gold);background:#FBF1DE;}
+  .equip-choice{display:flex;gap:8px;flex-wrap:wrap;}
+  .equip-choice label{
+    display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:9px;padding:9px 12px;
+    font-size:13px;font-weight:600;cursor:pointer;color:var(--ink-soft);transition:border-color .15s,background .15s,color .15s;
+  }
+  .equip-choice label:hover{border-color:var(--gold);}
+  .equip-choice input{display:none;}
+  .equip-choice input:checked + span{color:var(--night);}
+  .equip-choice label:has(input:checked){border-color:var(--gold);background:#FBF1DE;}
+  .equip-badges{display:inline-flex;gap:6px;flex-wrap:wrap;}
+  .equip-badge{
+    display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;padding:3px 9px;
+    border-radius:20px;background:rgba(0,0,0,.06);color:var(--night);
+  }
   .btn-primary{
     width:100%;background:var(--night);color:var(--cream);border:none;padding:13px;border-radius:9px;
     font-weight:600;font-size:14.5px;margin-top:6px;transition:background .15s,transform .1s;
@@ -336,6 +350,46 @@ const STATUS_LABELS = {
   terminee:"Terminée",
   annulee:"Annulée"
 };
+
+/* ---------- Equipements de bord (clim, ventilo, mini télé...) ---------- */
+const EQUIPEMENTS = [
+  {key:'clim', label:'Climatisation', icon:'❄️'},
+  {key:'ventilo', label:'Ventilateur', icon:'🌀'},
+  {key:'miniTV', label:'Mini télé', icon:'📺'},
+  {key:'wifi', label:'Wifi', icon:'📶'},
+  {key:'usb', label:'Prise USB', icon:'🔌'}
+];
+
+function renderEquipChoices(idPrefix, selected){
+  selected = selected || [];
+  return `<div class="equip-choice">
+    ${EQUIPEMENTS.map(eq=>`
+      <label>
+        <input type="checkbox" id="${idPrefix}-${eq.key}" value="${eq.key}" ${selected.includes(eq.key)?'checked':''}>
+        <span>${eq.icon} ${esc(eq.label)}</span>
+      </label>`).join('')}
+  </div>`;
+}
+
+function readEquipChoices(idPrefix){
+  return EQUIPEMENTS
+    .filter(eq=>{ const el=document.getElementById(`${idPrefix}-${eq.key}`); return el && el.checked; })
+    .map(eq=>eq.key);
+}
+
+function equipIconsText(list){
+  if(!list || list.length===0) return '';
+  const icons = list.map(k=>{ const eq = EQUIPEMENTS.find(e=>e.key===k); return eq ? eq.icon : ''; }).filter(Boolean);
+  return icons.length ? ` ${icons.join(' ')}` : '';
+}
+
+function equipBadges(list){
+  if(!list || list.length===0) return '';
+  return `<span class="equip-badges">${list.map(k=>{
+    const eq = EQUIPEMENTS.find(e=>e.key===k);
+    return eq ? `<span class="equip-badge" title="${esc(eq.label)}">${eq.icon} ${esc(eq.label)}</span>` : '';
+  }).join('')}</span>`;
+}
 
 let state = {
   authLoading:true, // vrai jusqu'a ce que onAuthStateChanged reponde une 1ere fois
@@ -755,6 +809,10 @@ function renderNouvelleReservation(){
         </div>
       </div>
       <div class="field">
+        <label>Équipements souhaités (optionnel)</label>
+        ${renderEquipChoices('r-equip')}
+      </div>
+      <div class="field">
         <label>Remarques (optionnel)</label>
         <input type="text" id="r-notes" placeholder="Heure souhaitée, détails particuliers...">
       </div>
@@ -774,9 +832,10 @@ async function submitReservation(e){
     lieuDepart: document.getElementById('r-depart').value.trim(),
     lieuArrivee: document.getElementById('r-arrivee').value.trim(),
     nbPassagers: Number(document.getElementById('r-passagers').value),
+    equipementsSouhaites: readEquipChoices('r-equip'),
     notes: document.getElementById('r-notes').value.trim(),
     statut: 'en_attente',
-    busId: null, busImmat: null, chauffeurId: null, chauffeurNom: null, prix: null,
+    busId: null, busImmat: null, busEquipements: null, chauffeurId: null, chauffeurNom: null, prix: null,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   await db.collection('reservations').add(data);
@@ -929,21 +988,37 @@ function renderFlotte(){
       <div class="field"><label>Immatriculation</label><input type="text" id="b-immat" placeholder="DK-1234-AB" required></div>
       <div class="field"><label>Marque / Modèle</label><input type="text" id="b-modele" placeholder="Toyota Coaster" required></div>
       <div class="field"><label>Capacité</label><input type="number" id="b-capacite" min="4" max="120" required></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>Équipements à bord</label>
+        ${renderEquipChoices('b-equip')}
+      </div>
       <button class="btn-primary" type="submit" style="width:auto;padding:11px 18px;">Ajouter</button>
     </form>
   </div>
   <div class="card">
     ${buses.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;">Aucun bus enregistré pour l'instant.</p>` : `
     <table class="fleet">
-      <thead><tr><th>Immatriculation</th><th>Modèle</th><th>Capacité</th><th>Statut</th><th></th></tr></thead>
+      <thead><tr><th>Immatriculation</th><th>Modèle</th><th>Capacité</th><th>Équipements</th><th>Statut</th><th></th></tr></thead>
       <tbody>
         ${buses.map(b=>`
         <tr>
           <td class="mono">${esc(b.immatriculation)}</td>
           <td>${esc(b.modele)}</td>
           <td>${esc(b.capacite)} places</td>
+          <td>${equipBadges(b.equipements) || `<span style="color:var(--ink-soft);font-size:12.5px;">—</span>`} <button class="btn-sm btn-ghost" data-edit-equip="${b.id}" style="margin-left:6px;">Modifier</button></td>
           <td><span class="status-dot ${b.statut==='disponible'?'st-confirmee':'st-en_route'}"></span>${b.statut==='disponible'?'Disponible':'En service'}</td>
           <td><button class="btn-sm btn-ghost" data-del-bus="${b.id}">Retirer</button></td>
+        </tr>
+        <tr data-equip-row="${b.id}" style="display:none;">
+          <td colspan="6">
+            <div class="assign-box">
+              ${renderEquipChoices('be-'+b.id, b.equipements)}
+              <div class="btn-row">
+                <button class="btn-sm btn-confirm" data-save-equip="${b.id}">Enregistrer</button>
+                <button class="btn-sm btn-ghost" data-cancel-equip="${b.id}">Annuler</button>
+              </div>
+            </div>
+          </td>
         </tr>`).join('')}
       </tbody>
     </table>`}
@@ -1004,7 +1079,7 @@ function ticketCard(r, mode){
           <label>Assigner un bus</label>
           <select data-assign-bus="${r.id}">
             <option value="">Choisir un bus</option>
-            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)</option>`).join('')}
+            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
           </select>
         </div>
         <div class="field">
@@ -1043,7 +1118,7 @@ function ticketCard(r, mode){
           <label>Bus assigné</label>
           <select data-set-bus="${r.id}">
             <option value="">— Aucun —</option>
-            ${state.buses.map(b=>`<option value="${b.id}" ${r.busId===b.id?'selected':''}>${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)</option>`).join('')}
+            ${state.buses.map(b=>`<option value="${b.id}" ${r.busId===b.id?'selected':''}>${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
           </select>
         </div>
         <div class="field">
@@ -1116,6 +1191,7 @@ function ticketCard(r, mode){
       </div>
       ${r.prix && mode==='admin' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Commission Teranga: <b>${esc(r.commission||0)} FCFA</b> • Part chauffeur/propriétaire: <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
       ${r.prix && mode==='chauffeur' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Ta part (après commission): <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
+      ${r.busEquipements && r.busEquipements.length ? `<div style="margin-top:8px;">${equipBadges(r.busEquipements)}</div>` : (r.equipementsSouhaites && r.equipementsSouhaites.length ? `<div style="margin-top:8px;"><span style="font-size:11.5px;color:var(--ink-soft);margin-right:6px;">Souhaités:</span>${equipBadges(r.equipementsSouhaites)}</div>` : ``)}
       ${r.notes ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(r.notes)}"</div>` : ``}
       ${r.prix ? `<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span class="pay-badge ${r.paiementStatut==='paye'?'paye':'non_paye'}">${r.paiementStatut==='paye'?'Payé':'Non payé'}</span>
@@ -1204,6 +1280,7 @@ function bindPanelEvents(){
       immatriculation: document.getElementById('b-immat').value.trim(),
       modele: document.getElementById('b-modele').value.trim(),
       capacite: Number(document.getElementById('b-capacite').value),
+      equipements: readEquipChoices('b-equip'),
       statut: 'disponible',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -1215,6 +1292,26 @@ function bindPanelEvents(){
     b.onclick = async ()=>{
       await db.collection('buses').doc(b.dataset.delBus).delete();
       showToast("Bus retiré.");
+    };
+  });
+
+  document.querySelectorAll('[data-edit-equip]').forEach(b=>{
+    b.onclick = ()=>{
+      const row = document.querySelector(`[data-equip-row="${b.dataset.editEquip}"]`);
+      if(row) row.style.display = row.style.display==='none' ? '' : 'none';
+    };
+  });
+  document.querySelectorAll('[data-cancel-equip]').forEach(b=>{
+    b.onclick = ()=>{
+      const row = document.querySelector(`[data-equip-row="${b.dataset.cancelEquip}"]`);
+      if(row) row.style.display = 'none';
+    };
+  });
+  document.querySelectorAll('[data-save-equip]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.saveEquip;
+      await db.collection('buses').doc(id).update({ equipements: readEquipChoices('be-'+id) });
+      showToast("Équipements mis à jour.");
     };
   });
 
@@ -1252,7 +1349,7 @@ function bindPanelEvents(){
       const split = prixVal ? calcSplit(prixVal) : { commission: null, montantChauffeur: null };
       await db.collection('reservations').doc(id).update({
         statut:'confirmee',
-        busId: bus.id, busImmat: bus.immatriculation,
+        busId: bus.id, busImmat: bus.immatriculation, busEquipements: bus.equipements || [],
         chauffeurId: drv.id, chauffeurNom: drv.nom,
         prix: prixVal,
         commission: split.commission,
@@ -1311,6 +1408,7 @@ function bindPanelEvents(){
         statut,
         busId: bus ? bus.id : null,
         busImmat: bus ? bus.immatriculation : null,
+        busEquipements: bus ? (bus.equipements || []) : null,
         chauffeurId: drv ? drv.id : null,
         chauffeurNom: drv ? drv.nom : null,
         prix: prixNum,
