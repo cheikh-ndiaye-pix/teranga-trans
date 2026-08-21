@@ -303,6 +303,22 @@ const db = firebase.firestore();
    ========================================================= */
 const ADMIN_EMAILS = ["papacheikh900@gmail.com"];
 
+/* =========================================================
+   💰 COMMISSION — modèle Yango simplifié.
+   Le client paie le prix total du trajet (via le lien de
+   paiement, ex: Wave). Teranga Trans garde COMMISSION_RATE
+   du prix, le reste (montantChauffeur) revient au chauffeur/
+   propriétaire du bus (versé manuellement pour l'instant —
+   pas encore de split automatique côté PayTech).
+   Change juste ce nombre pour ajuster le taux (0.12 = 12%).
+   ========================================================= */
+const COMMISSION_RATE = 0.12;
+function calcSplit(prix){
+  const p = Number(prix)||0;
+  const commission = Math.round(p * COMMISSION_RATE);
+  return { commission, montantChauffeur: p - commission };
+}
+
 /* ---------- Helpers anti-XSS ---------- */
 function esc(str){
   if(str===undefined || str===null) return "";
@@ -802,9 +818,10 @@ function renderAdminApercu(){
   const enRoute = state.reservations.filter(r=>r.statut==='en_route').length;
   const terminees = state.reservations.filter(r=>r.statut==='terminee').length;
   const refusees = state.reservations.filter(r=>r.statut==='refusee').length;
-  const revenu = state.reservations
-    .filter(r=>r.prix && (r.statut==='confirmee' || r.statut==='en_route' || r.statut==='terminee'))
-    .reduce((sum,r)=>sum + Number(r.prix||0), 0);
+  const resFacturees = state.reservations
+    .filter(r=>r.prix && (r.statut==='confirmee' || r.statut==='en_route' || r.statut==='terminee'));
+  const revenu = resFacturees.reduce((sum,r)=>sum + Number(r.prix||0), 0);
+  const commissionTotale = resFacturees.reduce((sum,r)=>sum + Number(r.commission||0), 0);
   const chauffeursActifs = state.drivers.filter(d=>d.status==='active').length;
   const chauffeursEnAttente = state.drivers.filter(d=>d.status==='pending').length;
   const busDispo = state.buses.filter(b=>b.statut==='disponible').length;
@@ -824,7 +841,8 @@ function renderAdminApercu(){
     ${stat("Demandes en attente", enAttente, enAttente>0 ? "à traiter" : "tout est à jour", "var(--gold)")}
     ${stat("Réservations confirmées", confirmees + enRoute, `${enRoute} en route`)}
     ${stat("Trajets terminés", terminees)}
-    ${stat("Revenu total", revenu.toLocaleString('fr-FR') + " FCFA", "réservations confirmées+")}
+    ${stat("Chiffre d'affaires", revenu.toLocaleString('fr-FR') + " FCFA", "réservations confirmées+")}
+    ${stat("Ta commission", commissionTotale.toLocaleString('fr-FR') + " FCFA", `${(COMMISSION_RATE*100).toFixed(0)}% du CA`, "var(--gold)")}
     ${stat("Chauffeurs actifs", chauffeursActifs, chauffeursEnAttente>0 ? `${chauffeursEnAttente} en attente de validation` : "aucun en attente")}
     ${stat("Bus disponibles", busDispo, `${state.buses.length} au total`)}
   </div>
@@ -1096,6 +1114,8 @@ function ticketCard(r, mode){
         ${r.chauffeurNom ? `<span>Chauffeur: <b>${esc(r.chauffeurNom)}</b></span>` : ``}
         ${r.prix ? `<span>Prix: <b>${esc(r.prix)} FCFA</b></span>` : ``}
       </div>
+      ${r.prix && mode==='admin' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Commission Teranga: <b>${esc(r.commission||0)} FCFA</b> • Part chauffeur/propriétaire: <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
+      ${r.prix && mode==='chauffeur' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Ta part (après commission): <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
       ${r.notes ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(r.notes)}"</div>` : ``}
       ${r.prix ? `<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span class="pay-badge ${r.paiementStatut==='paye'?'paye':'non_paye'}">${r.paiementStatut==='paye'?'Payé':'Non payé'}</span>
@@ -1228,11 +1248,15 @@ function bindPanelEvents(){
         showToast(`Conflit : ${conflict.busId===bus.id?'ce bus':'ce chauffeur'} est déjà assigné le même jour.`);
         return;
       }
+      const prixVal = priceInp.value ? Number(priceInp.value) : null;
+      const split = prixVal ? calcSplit(prixVal) : { commission: null, montantChauffeur: null };
       await db.collection('reservations').doc(id).update({
         statut:'confirmee',
         busId: bus.id, busImmat: bus.immatriculation,
         chauffeurId: drv.id, chauffeurNom: drv.nom,
-        prix: priceInp.value ? Number(priceInp.value) : null
+        prix: prixVal,
+        commission: split.commission,
+        montantChauffeur: split.montantChauffeur
       });
       showToast("Réservation confirmée et assignée.");
     };
@@ -1281,13 +1305,17 @@ function bindPanelEvents(){
           return;
         }
       }
+      const prixNum = prixV ? Number(prixV) : null;
+      const splitSave = prixNum ? calcSplit(prixNum) : { commission: null, montantChauffeur: null };
       await db.collection('reservations').doc(id).update({
         statut,
         busId: bus ? bus.id : null,
         busImmat: bus ? bus.immatriculation : null,
         chauffeurId: drv ? drv.id : null,
         chauffeurNom: drv ? drv.nom : null,
-        prix: prixV ? Number(prixV) : null,
+        prix: prixNum,
+        commission: splitSave.commission,
+        montantChauffeur: splitSave.montantChauffeur,
         paiementStatut: paiementEl ? paiementEl.value : 'non_paye',
         lienPaiement: lienEl ? lienEl.value.trim() : null
       });
