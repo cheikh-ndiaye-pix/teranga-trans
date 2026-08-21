@@ -283,11 +283,23 @@ const auth = firebase.auth();
 const db = firebase.firestore();
 
 /* =========================================================
-   ADMIN — comme dans TataPay (ADMIN_UID) : pas de choix
-   "Admin" à l'inscription. Mets ici l'email (ou les emails)
-   qui doivent devenir admin automatiquement à la création
-   du compte. Édite AUSSI la même liste dans firestore.rules
-   (fonction isAdminEmail) — sinon Firestore refusera l'écriture.
+   ⚠️ ADMIN — LISTE SOURCE UNIQUE (à synchroniser MANUELLEMENT) ⚠️
+
+   Cette liste détermine qui devient automatiquement "Admin"
+   lors de la création d'un compte (comme ADMIN_UID dans TataPay).
+
+   ⚠️⚠️ CETTE MÊME LISTE EXISTE AUSSI DANS firestore.rules ⚠️⚠️
+   (fonction isAdminEmail). Les DEUX listes doivent TOUJOURS
+   être identiques, sinon :
+     - soit le compte devient admin ici mais Firestore refuse
+       l'écriture (permission-denied),
+     - soit Firestore l'autorise alors que ce n'était pas prévu.
+
+   👉 Si tu modifies cette liste, va IMMÉDIATEMENT modifier
+   la liste correspondante dans firestore.rules, puis redéploie
+   les règles avec : firebase deploy --only firestore:rules
+
+   Admin(s) actuel(s) : papacheikh900@gmail.com uniquement.
    ========================================================= */
 const ADMIN_EMAILS = ["papacheikh900@gmail.com"];
 
