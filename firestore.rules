@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function isAdmin() {
+      return isSignedIn() && userDoc().role == 'admin';
+    }
+    function isActiveDriver() {
+      return isSignedIn() && userDoc().role == 'chauffeur' && userDoc().status == 'active';
+    }
+    function isActiveClient() {
+      return isSignedIn() && userDoc().role == 'client' && userDoc().status == 'active';
+    }
+    // Doit rester identique a ADMIN_EMAILS dans le HTML de l'application.
+    // request.auth.token.email vient de Firebase Auth : impossible a falsifier.
+    function isAdminEmail() {
+      return isSignedIn() && request.auth.token.email.lower() in
+        ['papacheikh900@gmail.com'];
+    }
+
+    // --- users ---
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      // Inscription libre pour client/admin : actifs immediatement.
+      // Un chauffeur doit d'abord etre valide par un admin : son compte
+      // est cree en status 'pending' (voir renderPendingDriver dans le HTML).
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && (
+                      (request.resource.data.role == 'client' && request.resource.data.status == 'active')
+                      ||
+                      (request.resource.data.role == 'chauffeur' && request.resource.data.status == 'pending')
+                      ||
+                      (request.resource.data.role == 'admin' && isAdminEmail() && request.resource.data.status == 'active')
+                    );
+
+      // Seul l'admin peut changer role/status/email.
+      // Un utilisateur ne peut modifier que son nom et son telephone.
+      allow update: if isAdmin()
+                    || (isSignedIn() && request.auth.uid == userId
+                        && request.resource.data.diff(resource.data)
+                             .affectedKeys().hasOnly(['nom', 'telephone']));
+
+      allow delete: if isAdmin();
+    }
+
+    // --- buses (flotte) ---
+    match /buses/{busId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // --- reservations ---
+    match /reservations/{resId} {
+      allow read: if isSignedIn() && (
+                     resource.data.clientId == request.auth.uid ||
+                     resource.data.chauffeurId == request.auth.uid ||
+                     isAdmin()
+                   );
+
+      // Un client actif ne peut creer qu'une demande "propre" :
+      // en_attente, sans bus/chauffeur/prix pre-remplis (ca, c'est le
+      // travail de l'admin lors de la confirmation).
+      allow create: if isActiveClient()
+                    && request.resource.data.clientId == request.auth.uid
+                    && request.resource.data.statut == 'en_attente'
+                    && request.resource.data.busId == null
+                    && request.resource.data.chauffeurId == null
+                    && request.resource.data.busImmat == null
+                    && request.resource.data.chauffeurNom == null
+                    && request.resource.data.prix == null;
+
+      allow update: if isAdmin() || (
+                      isActiveDriver() &&
+                      resource.data.chauffeurId == request.auth.uid &&
+                      (
+                        (resource.data.statut == 'confirmee' && request.resource.data.statut == 'en_route') ||
+                        (resource.data.statut == 'en_route' && request.resource.data.statut == 'terminee')
+                      ) &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statut'])
+                    ) || (
+                      // Le client peut annuler sa propre demande tant qu'elle
+                      // n'est pas encore en route / terminee / deja annulee.
+                      isActiveClient() &&
+                      resource.data.clientId == request.auth.uid &&
+                      resource.data.statut in ['en_attente', 'confirmee'] &&
+                      request.resource.data.statut == 'annulee' &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statut'])
+                    ) || (
+                      // Le client peut noter un trajet termine, une seule fois.
+                      isActiveClient() &&
+                      resource.data.clientId == request.auth.uid &&
+                      resource.data.statut == 'terminee' &&
+                      request.resource.data.statut == 'terminee' &&
+                      (!('note' in resource.data) || resource.data.note == null) &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['note', 'avis'])
+                    );
+
+      allow delete: if isAdmin();
+    }
+  }
+}
