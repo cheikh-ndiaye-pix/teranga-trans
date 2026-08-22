@@ -221,11 +221,13 @@
 
   .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;}
   .st-en_attente{background:var(--gold);}
+  .st-attente_chauffeur{background:#E08A1E;}
   .st-confirmee{background:var(--confirm-blue);}
   .st-refusee{background:var(--red);}
   .st-en_route{background:#4A6FE0;}
   .st-terminee{background:var(--green);}
   .st-annulee{background:var(--ink-soft);}
+  .countdown-timer{font-size:12px;font-weight:700;color:#E08A1E;margin-top:6px;display:inline-block;background:#FBF1DE;padding:4px 10px;border-radius:20px;}
   .loading-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--night);}
   .loading-wrap .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(250,246,236,.25);border-top-color:var(--gold);animation:spin 0.8s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -266,22 +268,6 @@
     box-shadow:0 10px 30px rgba(0,0,0,.25);z-index:100;
   }
   .assign-box{background:var(--cream);border-radius:10px;padding:14px;margin-top:12px;}
-
-  /* ---------- QR / Modal (embarquement + paiement) ---------- */
-  .btn-qr{background:var(--night);color:var(--cream);border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
-  .btn-qr:hover{background:var(--night-2);}
-  .tt-modal-overlay{position:fixed;inset:0;background:rgba(11,61,36,.55);z-index:200;display:flex;align-items:center;justify-content:center;padding:18px;}
-  .tt-modal{background:var(--paper);border-radius:16px;max-width:360px;width:100%;padding:22px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.3);position:relative;}
-  .tt-modal h3{margin:0 0 4px;font-size:18px;}
-  .tt-modal p.sub{color:var(--ink-soft);font-size:12.5px;margin:0 0 16px;}
-  .tt-modal-close{position:absolute;top:10px;right:10px;background:none;border:none;font-size:18px;color:var(--ink-soft);cursor:pointer;line-height:1;}
-  .tt-qr-wrap{display:flex;justify-content:center;margin-bottom:14px;}
-  .tt-qr-wrap canvas, .tt-qr-wrap img{border-radius:8px;background:#fff;padding:8px;}
-  .tt-qr-code{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);letter-spacing:.04em;margin-bottom:10px;}
-  .tt-cam-wrap{position:relative;width:100%;aspect-ratio:1/1;background:#000;border-radius:12px;overflow:hidden;margin-bottom:14px;}
-  .tt-cam-wrap video{width:100%;height:100%;object-fit:cover;}
-  .tt-cam-hint{font-size:12px;color:var(--ink-soft);margin-bottom:14px;}
-  .tt-cam-frame{border:3px solid var(--gold);border-radius:14px;position:absolute;inset:14%;pointer-events:none;box-shadow:0 0 0 2000px rgba(0,0,0,.35);}
 </style>
 </head>
 <body>
@@ -291,8 +277,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-functions-compat.js"></script>
 
 <script>
 /* =========================================================
@@ -313,6 +298,8 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+// Region europe-west1 : doit correspondre a setGlobalOptions() dans functions/index.js
+const cloudFunctions = firebase.app().functions('europe-west1');
 
 /* =========================================================
    ⚠️ ADMIN — LISTE SOURCE UNIQUE (à synchroniser MANUELLEMENT) ⚠️
@@ -345,6 +332,20 @@ const ADMIN_EMAILS = ["papacheikh900@gmail.com"];
    Change juste ce nombre pour ajuster le taux (0.12 = 12%).
    ========================================================= */
 const COMMISSION_RATE = 0.12;
+// Delai laisse au chauffeur pour accepter/refuser un trajet assigne par
+// l'admin avant que la reservation reparte automatiquement en attente.
+const DRIVER_ACCEPT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+// Commission fixe ajoutee par l'application sur chaque prix propose par
+// un chauffeur dans le "marche" des demandes clients (voir plus bas).
+// Contrairement a COMMISSION_RATE (pourcentage retire du prix fixe par
+// l'admin), ici la commission s'AJOUTE au prix que le chauffeur veut
+// recevoir : le client paie prixPropose + 500, le chauffeur touche
+// integralement le prix qu'il a propose.
+const PROPOSITION_COMMISSION_FCFA = 500;
+// Numero de contact officiel de Teranga Trans, affiche au CLIENT une fois
+// un chauffeur assigne/confirme (a la place du numero prive du chauffeur,
+// que seul l'admin doit voir).
+const TERANGA_SERVICE_PHONE = "77 860 35 51";
 function calcSplit(prix){
   const p = Number(prix)||0;
   const commission = Math.round(p * COMMISSION_RATE);
@@ -362,6 +363,7 @@ function esc(str){
 const EVENT_TYPES = ["Mariage","Baptême","Excursion","Deuil / Cérémonie","Transport d'entreprise","Autre"];
 const STATUS_LABELS = {
   en_attente:"En attente",
+  attente_chauffeur:"En attente du chauffeur",
   confirmee:"Confirmée",
   refusee:"Refusée",
   en_route:"En route",
@@ -430,7 +432,20 @@ let state = {
   toast:null,
   assignOpenFor:null,
   profileMsg:null,
-  knownStatuts:{} // pour detecter les changements de statut et notifier
+  knownStatuts:{}, // pour detecter les changements de statut et notifier
+  // ---- Marche des propositions chauffeur <-> client ----
+  openRequests:[],      // (chauffeur) demandes clients non encore assignees, ouvertes aux offres
+  propositions:[],      // (client) offres recues sur ses propres demandes
+  myPropositions:[],    // (chauffeur) ses propres offres envoyees, tous statuts
+  proposingFor:null,    // id de la reservation pour laquelle le chauffeur remplit son offre
+  editingTrajet:null,   // id du trajet publie que le chauffeur est en train de modifier
+  // ---- Trajets publies directement par un chauffeur (sans demande client
+  // prealable) : le chauffeur propose, le client recherche et reserve.
+  trajetsProposes:[],    // (client) trajets ouverts publies par des chauffeurs
+  mesTrajetsProposes:[], // (chauffeur) ses propres trajets publies, tous statuts
+  clientTrajetSearch:'',
+  // ---- Portefeuille / recharge PayTech ----
+  rechargements:[]       // (client) historique de ses demandes de recharge PayTech
 };
 
 const root = document.getElementById('root');
@@ -602,6 +617,7 @@ function bindAuthEvents(){
           nom, telephone: tel, email, role: finalRole,
           status: finalStatus,
           numeroPermis: finalRole==='chauffeur' ? permis : null,
+          solde: finalRole==='client' ? 0 : null, // portefeuille PayTech, uniquement pour les clients
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
         try{
@@ -680,9 +696,9 @@ function renderShell(){
   const role = state.profile.role;
   const roleLabel = role === 'client' ? 'Client' : role === 'admin' ? 'Admin' : 'Chauffeur';
   let navItems = [];
-  if(role === 'client') navItems = [['nouvelle','Nouvelle réservation'],['mesreservations','Mes réservations'],['profil','Mon profil']];
+  if(role === 'client') navItems = [['nouvelle','Nouvelle réservation'],['trajetschauffeurs','Trajets proposés'],['portefeuille','Mon portefeuille'],['mesreservations','Mes réservations'],['profil','Mon profil']];
   if(role === 'admin') navItems = [['apercu','Vue d\'ensemble'],['demandes','Demandes'],['toutes','Toutes les réservations'],['utilisateurs','Utilisateurs'],['flotte','Flotte'],['chauffeurs','Chauffeurs'],['profil','Mon profil']];
-  if(role === 'chauffeur') navItems = [['mestrajets','Mes trajets'],['profil','Mon profil']];
+  if(role === 'chauffeur') navItems = [['offres','Demandes clients'],['proposer','Proposer un trajet'],['mestrajets','Mes trajets'],['stats','Mes stats'],['profil','Mon profil']];
 
   if(!state.activePanel) state.activePanel = navItems[0][0];
 
@@ -737,6 +753,8 @@ function renderPanel(){
   const role = state.profile.role;
   const panel = state.activePanel;
   if(role==='client' && panel==='nouvelle') host.innerHTML = renderNouvelleReservation();
+  else if(role==='client' && panel==='trajetschauffeurs') host.innerHTML = renderClientTrajetsProposes();
+  else if(role==='client' && panel==='portefeuille') host.innerHTML = renderClientPortefeuille();
   else if(role==='client' && panel==='mesreservations') host.innerHTML = renderMesReservations();
   else if(role==='admin' && panel==='apercu') host.innerHTML = renderAdminApercu();
   else if(role==='admin' && panel==='demandes') host.innerHTML = renderAdminDemandes();
@@ -744,7 +762,10 @@ function renderPanel(){
   else if(role==='admin' && panel==='utilisateurs') host.innerHTML = renderUtilisateurs();
   else if(role==='admin' && panel==='flotte') host.innerHTML = renderFlotte();
   else if(role==='admin' && panel==='chauffeurs') host.innerHTML = renderChauffeurs();
+  else if(role==='chauffeur' && panel==='offres') host.innerHTML = renderChauffeurOffres();
+  else if(role==='chauffeur' && panel==='proposer') host.innerHTML = renderChauffeurProposer();
   else if(role==='chauffeur' && panel==='mestrajets') host.innerHTML = renderMesTrajets();
+  else if(role==='chauffeur' && panel==='stats') host.innerHTML = renderChauffeurStats();
   else if(panel==='profil') host.innerHTML = renderProfil();
   bindPanelEvents();
 }
@@ -883,8 +904,36 @@ function renderMesReservations(){
   <div class="dash-nav" style="margin-bottom:14px;">
     ${chips.map(([k,l])=>`<button data-client-filter="${k}" class="${f===k?'active':''}">${l}</button>`).join('')}
   </div>
-  ${list.length===0 ? emptyState("Aucune réservation dans ce filtre.","") : list.map(r=>ticketCard(r,'client')).join('')}
+  ${list.length===0 ? emptyState("Aucune réservation dans ce filtre.","") : list.map(r=>ticketCard(r,'client') + (r.statut==='en_attente' ? renderPropositionsForClient(r) : '')).join('')}
   `;
+}
+
+/* ---------- Client: offres recues des chauffeurs sur une demande ---------- */
+function renderPropositionsForClient(r){
+  const offers = state.propositions
+    .filter(p=>p.reservationId===r.id && p.statut==='en_attente')
+    .sort((a,b)=>(a.prixTotal||0)-(b.prixTotal||0));
+  if(offers.length===0) return '';
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  return `
+  <div class="card" style="margin-top:-10px;margin-bottom:20px;">
+    <div style="font-size:12.5px;font-weight:700;color:var(--night);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;">🚌 ${offers.length} chauffeur${offers.length>1?'s ont':' a'} proposé un prix pour ce trajet</div>
+    ${offers.map(p=>{
+      const prix = Number(p.prixTotal||0);
+      const canPayWallet = solde >= prix;
+      return `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;font-size:14px;color:var(--night);">${esc(p.chauffeurNom||'Chauffeur')}</div>
+          <div style="font-size:12px;color:var(--ink-soft);">${p.busImmat?`Bus ${esc(p.busImmat)} • `:''}<b>${prix.toLocaleString('fr-FR')} FCFA</b>${p.message?` — "${esc(p.message)}"`:''}</div>
+        </div>
+        <div class="btn-row" style="margin:0;">
+          ${canPayWallet ? `<button class="btn-sm btn-confirm" data-pay-proposition-wallet="${p.id}">💳 Payer avec mon solde</button>` : ``}
+          <button class="btn-sm ${canPayWallet?'btn-ghost':'btn-confirm'}" data-choose-proposition="${p.id}">Réserver (payer plus tard)</button>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
 /* ---------- Admin: vue d'ensemble ---------- */
@@ -1084,6 +1133,303 @@ function renderMesTrajets(){
   return list.map(r=>ticketCard(r,'chauffeur')).join('');
 }
 
+/* ---------- Chauffeur: demandes clients ouvertes (marché) ---------- */
+function renderChauffeurOffres(){
+  // Demandes clients pas encore assignees par l'admin ni prises par un
+  // autre chauffeur : c'est la que le chauffeur peut proposer son prix.
+  const list = [...state.openRequests].sort((a,b)=>(a._ts||0)-(b._ts||0));
+  if(list.length===0) return emptyState("Aucune demande disponible pour l'instant.", "Les nouvelles demandes clients non assignées apparaîtront ici.");
+  return list.map(r=>chauffeurOffreCard(r)).join('');
+}
+
+/* ---------- Chauffeur: publier un trajet a l'avance (sans demande client) ---------- */
+function renderChauffeurProposer(){
+  const mine = [...state.mesTrajetsProposes].sort((a,b)=>(b._ts||0)-(a._ts||0));
+  return `
+  <div class="section-title"><h2>Proposer un trajet</h2></div>
+  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:-10px;margin-bottom:16px;">Publie un trajet que tu es prêt à faire, avant même qu'un client ne le demande. Les clients pourront le voir dans « Trajets proposés » et le réserver directement.</p>
+  <div class="card" style="margin-bottom:24px;">
+    <form id="trajetProposeForm">
+      <div class="grid-2">
+        <div class="field"><label>Départ</label><input type="text" id="tp-depart" placeholder="Ex: Dakar, Plateau" required></div>
+        <div class="field"><label>Arrivée</label><input type="text" id="tp-arrivee" placeholder="Ex: Saint-Louis, Centre" required></div>
+      </div>
+      <div class="grid-2" style="margin-top:8px;">
+        <div class="field"><label>Date</label><input type="date" id="tp-date" required></div>
+        <div class="field"><label>Places disponibles</label><input type="number" min="1" max="120" id="tp-places" required></div>
+      </div>
+      <div class="grid-2" style="margin-top:8px;">
+        <div class="field"><label>Ton prix (FCFA)</label><input type="number" min="0" id="tp-prix" placeholder="Ex: 70000" required></div>
+        <div class="field">
+          <label>Bus (optionnel)</label>
+          <select id="tp-bus">
+            <option value="">— À préciser plus tard —</option>
+            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Message (optionnel)</label>
+        <input type="text" id="tp-msg" placeholder="Ex: départ 7h précises, climatisé...">
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ ${PROPOSITION_COMMISSION_FCFA} FCFA de commission Teranga Trans ajoutée automatiquement au prix affiché au client.</div>
+      <button class="btn-primary" type="submit" style="width:auto;padding:11px 20px;">Publier ce trajet</button>
+    </form>
+  </div>
+  ${mine.length===0 ? '' : `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">Mes trajets publiés</h3></div>
+  ${mine.map(t=>trajetProposeCard(t)).join('')}`}
+  `;
+}
+
+function trajetProposeCard(t){
+  const dateFmt = t.dateEvenement ? new Date(t.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const statutLabel = {ouvert:'Ouvert aux réservations', reserve:'Réservé', annule:'Retiré'}[t.statut] || t.statut;
+
+  if(state.editingTrajet === t.id){
+    return `
+    <div class="ticket">
+      <div class="stub-main">
+        <form id="trajetEditForm-${t.id}">
+          <div class="grid-2">
+            <div class="field"><label>Départ</label><input type="text" id="tpe-depart-${t.id}" value="${esc(t.lieuDepart)}" required></div>
+            <div class="field"><label>Arrivée</label><input type="text" id="tpe-arrivee-${t.id}" value="${esc(t.lieuArrivee)}" required></div>
+          </div>
+          <div class="grid-2" style="margin-top:8px;">
+            <div class="field"><label>Date</label><input type="date" id="tpe-date-${t.id}" value="${esc(t.dateEvenement)}" required></div>
+            <div class="field"><label>Places disponibles</label><input type="number" min="1" max="120" id="tpe-places-${t.id}" value="${esc(t.placesDisponibles)}" required></div>
+          </div>
+          <div class="grid-2" style="margin-top:8px;">
+            <div class="field"><label>Ton prix (FCFA)</label><input type="number" min="0" id="tpe-prix-${t.id}" value="${esc(t.prixPropose)}" required></div>
+            <div class="field">
+              <label>Bus (optionnel)</label>
+              <select id="tpe-bus-${t.id}">
+                <option value="">— À préciser plus tard —</option>
+                ${state.buses.map(b=>`<option value="${b.id}" ${t.busId===b.id?'selected':''}>${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="field" style="margin-top:8px;">
+            <label>Message (optionnel)</label>
+            <input type="text" id="tpe-msg-${t.id}" value="${esc(t.message||'')}">
+          </div>
+          <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ ${PROPOSITION_COMMISSION_FCFA} FCFA de commission Teranga Trans ajoutée automatiquement au prix affiché au client.</div>
+          <div class="btn-row">
+            <button class="btn-sm btn-confirm" type="submit">Enregistrer les modifications</button>
+            <button class="btn-sm btn-ghost" type="button" data-cancel-edit-trajet="${t.id}">Annuler</button>
+          </div>
+        </form>
+      </div>
+      <div class="perforation"></div>
+      <div class="stub-side">
+        <div class="status-label">Statut</div>
+        <div class="status-value">${esc(statutLabel)}</div>
+        <div class="seat-code mono">#${t.id ? t.id.slice(0,6).toUpperCase() : '------'}</div>
+      </div>
+    </div>`;
+  }
+
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(t.lieuDepart)} → ${esc(t.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${dateFmt} • ${esc(t.placesDisponibles)} places • <b>${Number(t.prixTotal||0).toLocaleString('fr-FR')} FCFA</b></div>
+      ${t.busImmat ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">Bus ${esc(t.busImmat)}</div>` : ``}
+      ${t.message ? `<div style="margin-top:6px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(t.message)}"</div>` : ``}
+      ${t.statut==='ouvert' ? `<div class="btn-row" style="margin-top:10px;"><button class="btn-sm btn-night" data-edit-trajet="${t.id}">Modifier</button><button class="btn-sm btn-ghost" data-cancel-trajet-propose="${t.id}">Retirer ce trajet</button></div>` : ``}
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value">${esc(statutLabel)}</div>
+      <div class="seat-code mono">#${t.id ? t.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Client: rechercher et reserver un trajet publie par un chauffeur ---------- */
+function renderClientTrajetsProposes(){
+  const q = (state.clientTrajetSearch||'').toLowerCase();
+  const list = state.trajetsProposes
+    .filter(t=> !q || `${t.lieuDepart||''} ${t.lieuArrivee||''}`.toLowerCase().includes(q))
+    .sort((a,b)=>(a._ts||0)-(b._ts||0));
+  return `
+  <div class="section-title"><h2>Trajets proposés par les chauffeurs</h2></div>
+  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:-10px;margin-bottom:16px;">Certains chauffeurs publient un trajet avant même qu'on le leur demande. Recherche et réserve directement si l'un d'eux te convient.</p>
+  <div class="field" style="max-width:340px;margin-bottom:14px;">
+    <label>Rechercher</label>
+    <input type="text" id="clientTrajetSearch" placeholder="Ville de départ ou d'arrivée..." value="${esc(state.clientTrajetSearch||'')}">
+  </div>
+  ${list.length===0 ? emptyState("Aucun trajet proposé pour l'instant.", "Reviens plus tard, ou fais ta propre demande depuis « Nouvelle réservation ».") : list.map(t=>clientTrajetProposeCard(t)).join('')}
+  `;
+}
+
+function clientTrajetProposeCard(t){
+  const dateFmt = t.dateEvenement ? new Date(t.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  const prix = Number(t.prixTotal||0);
+  const canPayWallet = solde >= prix;
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(t.lieuDepart)} → ${esc(t.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${dateFmt} • ${esc(t.placesDisponibles)} places dispo</div>
+      <div class="meta-row">
+        <span>Chauffeur: <b>${esc(t.chauffeurNom)}</b></span>
+        ${t.busImmat ? `<span>Bus: <b class="mono">${esc(t.busImmat)}</b></span>` : ``}
+        <span>Prix: <b>${prix.toLocaleString('fr-FR')} FCFA</b></span>
+      </div>
+      ${t.busEquipements && t.busEquipements.length ? `<div style="margin-top:8px;">${equipBadges(t.busEquipements)}</div>` : ``}
+      ${t.message ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(t.message)}"</div>` : ``}
+      <div class="btn-row" style="margin-top:10px;">
+        ${canPayWallet ? `<button class="btn-sm btn-confirm" data-pay-trajet-wallet="${t.id}">💳 Payer avec mon solde</button>` : ``}
+        <button class="btn-sm ${canPayWallet?'btn-ghost':'btn-confirm'}" data-book-trajet-propose="${t.id}">Réserver (payer plus tard)</button>
+      </div>
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value"><span class="status-dot st-en_attente"></span>Ouvert</div>
+      <div class="seat-code mono">#${t.id ? t.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Client: portefeuille (solde + recharge PayTech) ---------- */
+function renderClientPortefeuille(){
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  const rechs = [...state.rechargements];
+  const statutBadge = {
+    en_attente: '<span class="status-dot st-en_attente"></span>En attente',
+    validee: '<span class="status-dot st-confirmee"></span>Validée',
+    echouee: '<span class="status-dot st-annulee"></span>Échouée',
+  };
+  return `
+  <div class="section-title"><h2>Mon portefeuille</h2></div>
+  <div class="card" style="margin-bottom:20px;text-align:center;padding:28px 16px;">
+    <div style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;">Solde disponible</div>
+    <div style="font-size:34px;font-weight:800;color:var(--forest);margin-top:6px;">${solde.toLocaleString('fr-FR')} FCFA</div>
+  </div>
+  <div class="card" style="margin-bottom:24px;">
+    <h3 style="margin:0 0 12px;font-size:15px;">Recharger mon compte</h3>
+    <form id="rechargeForm">
+      <div class="field">
+        <label>Montant à recharger (FCFA)</label>
+        <input type="number" min="500" step="100" id="rc-montant" placeholder="Ex: 10000" required>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin:8px 0 12px;">Tu seras redirigé vers PayTech pour payer par Wave, Orange Money, carte bancaire, etc. Ton solde sera crédité automatiquement dès le paiement confirmé.</div>
+      <button class="btn-primary" type="submit" id="rechargeSubmitBtn" style="width:auto;padding:11px 20px;">Recharger via PayTech</button>
+    </form>
+  </div>
+  ${rechs.length===0 ? '' : `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">Historique des recharges</h3></div>
+  ${rechs.map(r=>`
+    <div class="ticket">
+      <div class="stub-main">
+        <div style="font-size:15px;font-weight:700;">${Number(r.montant||0).toLocaleString('fr-FR')} FCFA</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">${r._ts ? new Date(r._ts).toLocaleString('fr-FR') : ''}</div>
+      </div>
+      <div class="perforation"></div>
+      <div class="stub-side">
+        <div class="status-label">Statut</div>
+        <div class="status-value">${statutBadge[r.statut] || esc(r.statut)}</div>
+      </div>
+    </div>
+  `).join('')}`}
+  `;
+}
+
+function chauffeurOffreCard(r){
+  const dateFmt = r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const mine = state.myPropositions.find(p=>p.reservationId===r.id && p.statut==='en_attente');
+  let box;
+  if(mine){
+    box = `
+    <div class="assign-box">
+      <div style="font-size:13px;color:var(--night);">Ton offre : <b>${Number(mine.prixTotal||0).toLocaleString('fr-FR')} FCFA</b> — en attente de la réponse du client</div>
+      <div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-cancel-proposition="${mine.id}">Retirer mon offre</button></div>
+    </div>`;
+  } else if(state.proposingFor === r.id){
+    box = `
+    <div class="assign-box">
+      <div class="grid-2">
+        <div class="field">
+          <label>Ton prix (FCFA)</label>
+          <input type="number" min="0" id="propPrix-${r.id}" placeholder="Ex: 70000">
+        </div>
+        <div class="field">
+          <label>Bus (optionnel)</label>
+          <select id="propBus-${r.id}">
+            <option value="">— À préciser plus tard —</option>
+            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Message (optionnel)</label>
+        <input type="text" id="propMsg-${r.id}" placeholder="Ex: dispo dès 8h, bus climatisé...">
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;">+ ${PROPOSITION_COMMISSION_FCFA} FCFA de commission Teranga Trans ajoutée automatiquement au prix affiché au client.</div>
+      <div class="btn-row">
+        <button class="btn-sm btn-confirm" data-submit-proposition="${r.id}">Envoyer mon offre</button>
+        <button class="btn-sm btn-ghost" data-cancel-propose-form="${r.id}">Annuler</button>
+      </div>
+    </div>`;
+  } else {
+    box = `<div class="btn-row"><button class="btn-sm btn-night" data-open-propose="${r.id}">💬 Proposer un prix</button></div>`;
+  }
+  // Pas de nom/telephone client affiche ici : ces infos ne sont partagees
+  // qu'une fois l'offre acceptee (elles arrivent alors via chauffeurId sur
+  // la reservation elle-meme, deja lisible par le chauffeur assigne).
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${esc(r.typeEvenement)} • ${dateFmt}</div>
+      <div class="meta-row">
+        <span><b>${esc(r.nbPassagers)}</b> passagers</span>
+      </div>
+      ${r.equipementsSouhaites && r.equipementsSouhaites.length ? `<div style="margin-top:8px;"><span style="font-size:11.5px;color:var(--ink-soft);margin-right:6px;">Souhaités:</span>${equipBadges(r.equipementsSouhaites)}</div>` : ``}
+      ${r.notes ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(r.notes)}"</div>` : ``}
+      ${box}
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value"><span class="status-dot st-en_attente"></span>Ouverte aux offres</div>
+      <div class="seat-code mono">#${r.id ? r.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Chauffeur: mes stats ---------- */
+function renderChauffeurStats(){
+  const mine = state.reservations.filter(r=>r.chauffeurId === state.user.uid);
+  const termines = mine.filter(r=>r.statut==='terminee');
+  const enCours = mine.filter(r=>r.statut==='confirmee' || r.statut==='en_route');
+  const enAttenteAcceptation = mine.filter(r=>r.statut==='attente_chauffeur').length;
+  const revenuTotal = termines.reduce((sum,r)=>sum + Number(r.montantChauffeur||0), 0);
+  const notes = termines.filter(r=>r.note).map(r=>r.note);
+  const noteMoyenne = notes.length ? (notes.reduce((a,b)=>a+b,0) / notes.length) : null;
+
+  const stat = (label, value, sub, color) => `
+    <div class="stat-card">
+      <div class="stat-value" style="color:${color||'var(--night)'};">${value}</div>
+      <div class="stat-label">${esc(label)}</div>
+      ${sub ? `<div class="stat-sub">${sub}</div>` : ``}
+    </div>`;
+
+  return `
+  <div class="section-title"><h2>Mes statistiques</h2></div>
+  <div class="stat-grid">
+    ${stat("Trajets terminés", termines.length)}
+    ${stat("Trajets en cours", enCours.length, enAttenteAcceptation>0 ? `${enAttenteAcceptation} en attente de ta réponse` : "aucun en attente", enAttenteAcceptation>0 ? "#E08A1E" : null)}
+    ${stat("Revenu total", revenuTotal.toLocaleString('fr-FR') + " FCFA", `ta part après commission (${(COMMISSION_RATE*100).toFixed(0)}%)`, "var(--gold)")}
+    ${stat("Note moyenne", noteMoyenne!==null ? noteMoyenne.toFixed(1) + " ★" : "—", notes.length ? `sur ${notes.length} avis` : "aucun avis pour l'instant", "var(--gold)")}
+  </div>
+  `;
+}
+
 /* ---------- Ticket card (shared component) ---------- */
 function ticketCard(r, mode){
   const st = r.statut;
@@ -1153,6 +1499,9 @@ function ticketCard(r, mode){
       </div>
     </div>`;
   }
+  if(mode==='chauffeur' && st==='attente_chauffeur'){
+    actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-accept-trajet="${r.id}">✅ Accepter le trajet</button><button class="btn-sm btn-red" data-reject-trajet="${r.id}">❌ Refuser</button></div>`;
+  }
   if(mode==='chauffeur' && st==='confirmee'){
     actions = `<div class="btn-row"><button class="btn-sm btn-night" data-start-trip="${r.id}">Démarrer le trajet</button></div>`;
   }
@@ -1205,6 +1554,8 @@ function ticketCard(r, mode){
         ${mode!=='client' ? `<span>Client: <b>${esc(r.clientNom)}</b></span>` : ``}
         ${r.busImmat ? `<span>Bus: <b class="mono">${esc(r.busImmat)}</b></span>` : ``}
         ${r.chauffeurNom ? `<span>Chauffeur: <b>${esc(r.chauffeurNom)}</b></span>` : ``}
+        ${r.chauffeurNom && mode.startsWith('admin') ? `<span>Tél. chauffeur: <b>${esc(r.chauffeurTelephone||'—')}</b></span>` : ``}
+        ${r.chauffeurNom && mode==='client' ? `<span>Contact chauffeur (service Teranga): <b>${esc(TERANGA_SERVICE_PHONE)}</b></span>` : ``}
         ${r.prix ? `<span>Prix: <b>${esc(r.prix)} FCFA</b></span>` : ``}
       </div>
       ${r.prix && mode==='admin' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Commission Teranga: <b>${esc(r.commission||0)} FCFA</b> • Part chauffeur/propriétaire: <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
@@ -1216,6 +1567,7 @@ function ticketCard(r, mode){
         ${mode==='client' && r.paiementStatut!=='paye' && r.lienPaiement ? `<a href="${esc(r.lienPaiement)}" target="_blank" rel="noopener" class="btn-sm btn-confirm" style="text-decoration:none;">Payer maintenant</a>` : ``}
       </div>` : ``}
       ${r.note ? `<div style="margin-top:8px;font-size:13px;color:var(--gold);">${'★'.repeat(r.note)}${'☆'.repeat(5-r.note)} ${r.avis?`<span style="color:var(--ink-soft);font-style:italic;">— "${esc(r.avis)}"</span>`:``}</div>` : ``}
+      ${st==='attente_chauffeur' && r.expiresAt ? `<div class="countdown-timer" data-expires="${r.expiresAt}">⏳ …</div>` : ``}
       ${actions}
     </div>
     <div class="perforation"></div>
@@ -1246,188 +1598,12 @@ function busLogo(size, color){
   </svg>`;
 }
 
-/* =========================================================
-   QR CODE — ticket d'embarquement + partage du lien de paiement
-   Repris et adapté du système QR de TataPay :
-   - le client affiche un QR encodant "terangatrans://resa/<id>"
-     qu'il montre au chauffeur (ou à l'admin) à l'embarquement ;
-   - un QR peut aussi être généré pour le lien de paiement (Wave/OM)
-     afin qu'il soit scanné avec un autre téléphone ;
-   - le chauffeur peut scanner ce QR via la caméra pour vérifier
-     la réservation avant de démarrer le trajet.
-========================================================= */
-function renderQR(elId, text, size){
-  size = size || 190;
-  const el = document.getElementById(elId);
-  if(!el) return;
-  el.innerHTML = '';
-  const canvas = document.createElement('canvas');
-  canvas.width = size; canvas.height = size;
-  canvas.style.cssText = `width:${size}px;height:${size}px;display:block;`;
-  el.appendChild(canvas);
-  function fallbackImg(){
-    el.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(text)}&ecc=M&margin=8" width="${size}" height="${size}" style="border-radius:8px;display:block;" onerror="this.parentNode.innerHTML='<div style=&quot;color:#c00;font-size:12px;padding:16px;&quot;>QR indisponible (hors-ligne)</div>'"/>`;
-  }
-  if(window.QRCode && QRCode.toCanvas){
-    QRCode.toCanvas(canvas, text, {width:size, margin:2, errorCorrectionLevel:'M'}, (err)=>{
-      if(err){ console.warn('[renderQR] échec génération locale', err); fallbackImg(); }
-    });
-  } else {
-    fallbackImg();
-  }
-}
-
-function openModal(html){
-  closeModal();
-  const overlay = document.createElement('div');
-  overlay.className = 'tt-modal-overlay';
-  overlay.id = 'ttModalOverlay';
-  overlay.innerHTML = `<div class="tt-modal">${html}</div>`;
-  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeModal(); });
-  document.body.appendChild(overlay);
-}
-
-function closeModal(){
-  stopTicketScanCamera();
-  const el = document.getElementById('ttModalOverlay');
-  if(el) el.remove();
-}
-
-/* QR d'embarquement, affiché côté client (et rappel côté chauffeur) */
-function openTicketQR(resId){
-  const r = state.reservations.find(x=>x.id===resId);
-  if(!r) return;
-  const payload = `terangatrans://resa/${resId}`;
-  openModal(`
-    <button class="tt-modal-close" onclick="closeModal()">✕</button>
-    <h3>🎫 Ticket d'embarquement</h3>
-    <p class="sub">${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}${r.dateEvenement ? ' • ' + new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : ''}</p>
-    <div class="tt-qr-wrap" id="ttTicketQRWrap"></div>
-    <div class="tt-qr-code">#${resId.slice(0,6).toUpperCase()}</div>
-    <p class="sub" style="margin-bottom:0;">Présente ce QR code au chauffeur à l'embarquement pour qu'il vérifie ta réservation.</p>
-  `);
-  setTimeout(()=>renderQR('ttTicketQRWrap', payload, 190), 30);
-}
-
-/* QR pour le lien de paiement Wave/Orange Money, pour paiement à distance */
-function openPaymentQR(resId){
-  const r = state.reservations.find(x=>x.id===resId);
-  if(!r || !r.lienPaiement) return;
-  openModal(`
-    <button class="tt-modal-close" onclick="closeModal()">✕</button>
-    <h3>📱 Payer par QR code</h3>
-    <p class="sub">Fais scanner ce QR avec un autre téléphone (Wave, Orange Money…) pour régler cette réservation à ta place.</p>
-    <div class="tt-qr-wrap" id="ttPayQRWrap"></div>
-    <p class="sub" style="margin-bottom:14px;">Montant : <b>${r.prix ? esc(r.prix)+' FCFA' : '—'}</b></p>
-    <a href="${esc(r.lienPaiement)}" target="_blank" rel="noopener" class="btn-qr" style="text-decoration:none;">Ouvrir le lien de paiement</a>
-  `);
-  setTimeout(()=>renderQR('ttPayQRWrap', r.lienPaiement, 190), 30);
-}
-
-/* ---------- Scan caméra du QR d'embarquement (côté chauffeur) ---------- */
-let ttScanState = {stream:null, scanning:false, video:null, canvas:null, ctx:null, detector:null};
-
-function openScanTicket(){
-  openModal(`
-    <button class="tt-modal-close" onclick="closeModal()">✕</button>
-    <h3>📷 Scanner un ticket</h3>
-    <p class="sub">Scanne le QR d'embarquement du passager pour vérifier sa réservation.</p>
-    <div class="tt-cam-wrap"><video id="ttScanVideo" playsinline autoplay muted></video><div class="tt-cam-frame"></div></div>
-    <p class="tt-cam-hint" id="ttScanHint">Positionne le QR dans le cadre…</p>
-  `);
-  startTicketScanCamera();
-}
-
-async function startTicketScanCamera(){
-  const video = document.getElementById('ttScanVideo');
-  if(!video) return;
-  try{
-    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}, audio:false});
-    ttScanState.stream = stream;
-    video.srcObject = stream;
-    await video.play();
-    ttScanState.video = video;
-    ttScanState.scanning = true;
-    if('BarcodeDetector' in window){
-      try{ ttScanState.detector = new BarcodeDetector({formats:['qr_code']}); }catch(e){ ttScanState.detector = null; }
-    }
-    if(!ttScanState.canvas){
-      ttScanState.canvas = document.createElement('canvas');
-      ttScanState.ctx = ttScanState.canvas.getContext('2d', {willReadFrequently:true});
-    }
-    ticketScanLoop();
-  }catch(e){
-    console.warn('[startTicketScanCamera] échec accès caméra', e);
-    const hint = document.getElementById('ttScanHint');
-    if(hint) hint.textContent = "⚠️ Impossible d'accéder à la caméra. Vérifie les permissions.";
-  }
-}
-
-function stopTicketScanCamera(){
-  ttScanState.scanning = false;
-  if(ttScanState.stream){ ttScanState.stream.getTracks().forEach(t=>t.stop()); ttScanState.stream = null; }
-  ttScanState.video = null;
-}
-
-function ticketScanLoop(){
-  if(!ttScanState.scanning) return;
-  const video = ttScanState.video;
-  if(!video || video.readyState !== video.HAVE_ENOUGH_DATA){ requestAnimationFrame(ticketScanLoop); return; }
-  if(ttScanState.detector){
-    ttScanState.detector.detect(video).then(codes=>{
-      if(codes && codes.length){ handleTicketScan(codes[0].rawValue); return; }
-      scanWithJsQRFallback(video);
-    }).catch(()=>scanWithJsQRFallback(video));
-  } else {
-    scanWithJsQRFallback(video);
-  }
-}
-
-function scanWithJsQRFallback(video){
-  if(!ttScanState.scanning) return;
-  if(typeof jsQR === 'function'){
-    const w = video.videoWidth, h = video.videoHeight;
-    if(w && h){
-      ttScanState.canvas.width = w; ttScanState.canvas.height = h;
-      ttScanState.ctx.drawImage(video, 0, 0, w, h);
-      try{
-        const img = ttScanState.ctx.getImageData(0, 0, w, h);
-        const code = jsQR(img.data, w, h, {inversionAttempts:'dontInvert'});
-        if(code && code.data){ handleTicketScan(code.data); return; }
-      }catch(e){}
-    }
-  }
-  requestAnimationFrame(ticketScanLoop);
-}
-
-function handleTicketScan(raw){
-  ttScanState.scanning = false;
-  const m = (raw||'').trim().match(/terangatrans:\/\/resa\/(.+)/i);
-  if(!m){ showToast("QR invalide : ce n'est pas un ticket Teranga Trans."); ttScanState.scanning = true; requestAnimationFrame(ticketScanLoop); return; }
-  const resId = m[1];
-  const r = state.reservations.find(x=>x.id===resId);
-  closeModal();
-  if(!r){ showToast('Réservation introuvable.'); return; }
-  if(r.chauffeurId && state.user && r.chauffeurId !== state.user.uid){
-    showToast("⚠️ Ce ticket n'est pas assigné à ton trajet.");
-    return;
-  }
-  openModal(`
-    <button class="tt-modal-close" onclick="closeModal()">✕</button>
-    <h3>✅ Ticket vérifié</h3>
-    <p class="sub" style="margin-bottom:14px;">${esc(r.clientNom||'')} • ${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}</p>
-    <div class="tt-qr-code" style="margin-bottom:16px;">#${resId.slice(0,6).toUpperCase()} • ${STATUS_LABELS[r.statut]||r.statut}</div>
-    ${r.statut==='confirmee' ? `<button class="btn-qr" style="width:100%;justify-content:center;" onclick="closeModal();document.querySelector('[data-start-trip=\\'${resId}\\']')?.click();">Démarrer le trajet</button>` : ``}
-    ${r.statut==='en_route' ? `<button class="btn-qr" style="width:100%;justify-content:center;" onclick="closeModal();document.querySelector('[data-finish-trip=\\'${resId}\\']')?.click();">Marquer terminé</button>` : ``}
-  `);
-}
-
 /* ---------- Détection de conflit bus/chauffeur (même date) ---------- */
 function findBookingConflict(dateEvenement, busId, chauffeurId, excludeId){
   return state.reservations.find(r=>
     r.id !== excludeId &&
     r.dateEvenement === dateEvenement &&
-    (r.statut==='confirmee' || r.statut==='en_route') &&
+    (r.statut==='confirmee' || r.statut==='en_route' || r.statut==='attente_chauffeur') &&
     ((busId && r.busId===busId) || (chauffeurId && r.chauffeurId===chauffeurId))
   );
 }
@@ -1542,14 +1718,16 @@ function bindPanelEvents(){
       const prixVal = priceInp.value ? Number(priceInp.value) : null;
       const split = prixVal ? calcSplit(prixVal) : { commission: null, montantChauffeur: null };
       await db.collection('reservations').doc(id).update({
-        statut:'confirmee',
+        // Le chauffeur doit d'abord accepter avant que ce soit vraiment confirmé.
+        statut:'attente_chauffeur',
+        expiresAt: Date.now() + DRIVER_ACCEPT_TIMEOUT_MS,
         busId: bus.id, busImmat: bus.immatriculation, busEquipements: bus.equipements || [],
-        chauffeurId: drv.id, chauffeurNom: drv.nom,
+        chauffeurId: drv.id, chauffeurNom: drv.nom, chauffeurTelephone: drv.telephone || '',
         prix: prixVal,
         commission: split.commission,
         montantChauffeur: split.montantChauffeur
       });
-      showToast("Réservation confirmée et assignée.");
+      showToast("Assigné. En attente d'acceptation du chauffeur.");
     };
   });
   document.querySelectorAll('[data-refuse-res]').forEach(b=>{
@@ -1558,6 +1736,303 @@ function bindPanelEvents(){
       showToast("Demande refusée.");
     };
   });
+  document.querySelectorAll('[data-accept-trajet]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.acceptTrajet;
+      try{
+        await db.collection('reservations').doc(id).update({statut:'confirmee', expiresAt:null});
+        showToast("Trajet accepté ! Bonne route en préparation.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-reject-trajet]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Refuser ce trajet ? L'admin devra réassigner un autre chauffeur.")) return;
+      const id = b.dataset.rejectTrajet;
+      try{
+        await db.collection('reservations').doc(id).update({
+          statut:'en_attente',
+          busId:null, busImmat:null, busEquipements:null,
+          chauffeurId:null, chauffeurNom:null,
+          expiresAt:null
+        });
+        showToast("Trajet refusé. Il repart en attente d'assignation.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
+  /* ---- Marché des propositions chauffeur <-> client ---- */
+  document.querySelectorAll('[data-open-propose]').forEach(b=>{
+    b.onclick = ()=>{ state.proposingFor = b.dataset.openPropose; renderPanel(); };
+  });
+  document.querySelectorAll('[data-cancel-propose-form]').forEach(b=>{
+    b.onclick = ()=>{ state.proposingFor = null; renderPanel(); };
+  });
+  document.querySelectorAll('[data-submit-proposition]').forEach(b=>{
+    b.onclick = async ()=>{
+      const resId = b.dataset.submitProposition;
+      const req = state.openRequests.find(r=>r.id===resId);
+      if(!req){ showToast("Cette demande n'est plus disponible."); state.proposingFor=null; renderPanel(); return; }
+      const prixInp = document.getElementById(`propPrix-${resId}`);
+      const busSel = document.getElementById(`propBus-${resId}`);
+      const msgInp = document.getElementById(`propMsg-${resId}`);
+      const prixPropose = prixInp && prixInp.value ? Number(prixInp.value) : 0;
+      if(!prixPropose || prixPropose<=0){ showToast("Indique le prix que tu veux recevoir."); return; }
+      const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+      try{
+        await db.collection('propositions').add({
+          reservationId: resId,
+          clientId: req.clientId,
+          chauffeurId: state.user.uid,
+          chauffeurNom: state.profile.nom || state.profile.email,
+          chauffeurTelephone: state.profile.telephone || '',
+          busId: bus ? bus.id : null,
+          busImmat: bus ? bus.immatriculation : null,
+          busEquipements: bus ? (bus.equipements || []) : null,
+          prixPropose,
+          commission: PROPOSITION_COMMISSION_FCFA,
+          prixTotal: prixPropose + PROPOSITION_COMMISSION_FCFA,
+          message: msgInp ? msgInp.value.trim() : '',
+          statut: 'en_attente',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        state.proposingFor = null;
+        showToast("Offre envoyée au client !");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-cancel-proposition]').forEach(b=>{
+    b.onclick = async ()=>{
+      try{
+        await db.collection('propositions').doc(b.dataset.cancelProposition).delete();
+        showToast("Offre retirée.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-choose-proposition]').forEach(b=>{
+    b.onclick = async ()=>{
+      const propId = b.dataset.chooseProposition;
+      const prop = state.propositions.find(p=>p.id===propId);
+      if(!prop) return;
+      if(!confirm(`Réserver avec ${prop.chauffeurNom} pour ${Number(prop.prixTotal||0).toLocaleString('fr-FR')} FCFA ?`)) return;
+      try{
+        // Transaction : verifie que la demande est toujours ouverte et
+        // qu'il n'y a pas de conflit bus/chauffeur avant de confirmer,
+        // pour eviter qu'un admin et un client ne confirment la meme
+        // demande en meme temps.
+        await db.runTransaction(async (tx)=>{
+          const resRef = db.collection('reservations').doc(prop.reservationId);
+          const resSnap = await tx.get(resRef);
+          if(!resSnap.exists()) throw new Error("Réservation introuvable.");
+          const resData = resSnap.data();
+          if(resData.statut !== 'en_attente') throw new Error("Cette demande n'est plus disponible.");
+          const conflict = findBookingConflict(resData.dateEvenement, prop.busId, prop.chauffeurId, prop.reservationId);
+          if(conflict) throw new Error("Ce chauffeur (ou ce bus) est déjà pris ce jour-là. Choisis une autre offre.");
+          tx.update(resRef, {
+            statut: 'confirmee',
+            chauffeurId: prop.chauffeurId, chauffeurNom: prop.chauffeurNom, chauffeurTelephone: prop.chauffeurTelephone || '',
+            busId: prop.busId || null, busImmat: prop.busImmat || null, busEquipements: prop.busEquipements || null,
+            prix: prop.prixTotal, commission: prop.commission, montantChauffeur: prop.prixPropose,
+            paiementStatut: 'non_paye'
+          });
+          tx.update(db.collection('propositions').doc(propId), {statut:'acceptee'});
+        });
+        // Les autres offres reçues sur cette demande deviennent caduques
+        // (best-effort, hors transaction : ce n'est qu'un nettoyage d'affichage).
+        const others = state.propositions.filter(p=>p.reservationId===prop.reservationId && p.id!==propId && p.statut==='en_attente');
+        if(others.length){
+          const batch = db.batch();
+          others.forEach(o=> batch.update(db.collection('propositions').doc(o.id), {statut:'refusee'}));
+          await batch.commit();
+        }
+        showToast("Réservation confirmée avec ce chauffeur !");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  /* ---- Trajets publies par un chauffeur a l'avance (sans demande client) ---- */
+  const tpForm = document.getElementById('trajetProposeForm');
+  if(tpForm) tpForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const depart = document.getElementById('tp-depart').value.trim();
+    const arrivee = document.getElementById('tp-arrivee').value.trim();
+    const date = document.getElementById('tp-date').value;
+    const places = Number(document.getElementById('tp-places').value)||0;
+    const prix = Number(document.getElementById('tp-prix').value)||0;
+    const busSel = document.getElementById('tp-bus');
+    const msg = document.getElementById('tp-msg').value.trim();
+    if(!depart || !arrivee || !date || !places || !prix){ showToast("Remplis tous les champs obligatoires."); return; }
+    const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+    try{
+      await db.collection('trajetsProposes').add({
+        chauffeurId: state.user.uid,
+        chauffeurNom: state.profile.nom || state.profile.email,
+        chauffeurTelephone: state.profile.telephone || '',
+        lieuDepart: depart, lieuArrivee: arrivee, dateEvenement: date,
+        placesDisponibles: places,
+        prixPropose: prix, commission: PROPOSITION_COMMISSION_FCFA, prixTotal: prix + PROPOSITION_COMMISSION_FCFA,
+        busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements||[]) : null,
+        message: msg,
+        statut: 'ouvert',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showToast("Trajet publié ! Les clients peuvent maintenant le voir.");
+      tpForm.reset();
+    }catch(err){ showToast("Erreur : " + err.message); }
+  };
+
+  document.querySelectorAll('[data-cancel-trajet-propose]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Retirer ce trajet publié ?")) return;
+      try{
+        await db.collection('trajetsProposes').doc(b.dataset.cancelTrajetPropose).update({statut:'annule'});
+        showToast("Trajet retiré.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
+  document.querySelectorAll('[data-edit-trajet]').forEach(b=>{
+    b.onclick = ()=>{ state.editingTrajet = b.dataset.editTrajet; renderPanel(); };
+  });
+  document.querySelectorAll('[data-cancel-edit-trajet]').forEach(b=>{
+    b.onclick = ()=>{ state.editingTrajet = null; renderPanel(); };
+  });
+  if(state.editingTrajet){
+    const editForm = document.getElementById(`trajetEditForm-${state.editingTrajet}`);
+    if(editForm) editForm.onsubmit = async (e)=>{
+      e.preventDefault();
+      const id = state.editingTrajet;
+      const depart = document.getElementById(`tpe-depart-${id}`).value.trim();
+      const arrivee = document.getElementById(`tpe-arrivee-${id}`).value.trim();
+      const date = document.getElementById(`tpe-date-${id}`).value;
+      const places = Number(document.getElementById(`tpe-places-${id}`).value)||0;
+      const prix = Number(document.getElementById(`tpe-prix-${id}`).value)||0;
+      const busSel = document.getElementById(`tpe-bus-${id}`);
+      const msg = document.getElementById(`tpe-msg-${id}`).value.trim();
+      if(!depart || !arrivee || !date || !places || !prix){ showToast("Remplis tous les champs obligatoires."); return; }
+      const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+      try{
+        await db.collection('trajetsProposes').doc(id).update({
+          lieuDepart: depart, lieuArrivee: arrivee, dateEvenement: date,
+          placesDisponibles: places,
+          prixPropose: prix, commission: PROPOSITION_COMMISSION_FCFA, prixTotal: prix + PROPOSITION_COMMISSION_FCFA,
+          busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements||[]) : null,
+          message: msg
+        });
+        state.editingTrajet = null;
+        showToast("Trajet modifié !");
+      }catch(err){ showToast("Erreur : " + err.message); }
+    };
+  }
+
+  const cts = document.getElementById('clientTrajetSearch');
+  if(cts) cts.oninput = ()=>{ state.clientTrajetSearch = cts.value; const p=cts.selectionStart; renderPanel(); const n=document.getElementById('clientTrajetSearch'); if(n){ n.focus(); n.setSelectionRange(p,p); } };
+
+  /* ---- Portefeuille : recharge PayTech + paiement du solde ---- */
+  const rechargeForm = document.getElementById('rechargeForm');
+  if(rechargeForm) rechargeForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const amount = Number(document.getElementById('rc-montant').value)||0;
+    if(amount < 500){ showToast("Montant minimum : 500 FCFA."); return; }
+    const btn = document.getElementById('rechargeSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Redirection vers PayTech...';
+    try{
+      const createPaytechPayment = cloudFunctions.httpsCallable('createPaytechPayment');
+      const res = await createPaytechPayment({amount});
+      if(res.data && res.data.redirect_url){
+        window.location.href = res.data.redirect_url;
+      } else {
+        throw new Error("Réponse PayTech invalide.");
+      }
+    }catch(err){
+      showToast("Erreur : " + (err.message || "impossible de lancer le paiement."));
+      btn.disabled = false; btn.textContent = 'Recharger via PayTech';
+    }
+  };
+
+  document.querySelectorAll('[data-pay-proposition-wallet]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Payer cette offre directement avec ton solde ?")) return;
+      b.disabled = true; b.textContent = 'Paiement en cours...';
+      try{
+        const payFn = cloudFunctions.httpsCallable('payReservationFromWallet');
+        await payFn({type:'proposition', id: b.dataset.payPropositionWallet});
+        showToast("Payé avec ton solde ! Réservation confirmée.");
+      }catch(err){
+        showToast("Erreur : " + (err.message || "paiement impossible."));
+        b.disabled = false; b.textContent = '💳 Payer avec mon solde';
+      }
+    };
+  });
+
+  document.querySelectorAll('[data-pay-trajet-wallet]').forEach(b=>{
+    b.onclick = async ()=>{
+      const trajetId = b.dataset.payTrajetWallet;
+      const trajet = state.trajetsProposes.find(t=>t.id===trajetId);
+      if(!trajet) return;
+      const passagersStr = prompt(`Combien de passagers ? (max ${trajet.placesDisponibles})`, String(trajet.placesDisponibles));
+      if(passagersStr===null) return;
+      const passagers = Number(passagersStr);
+      if(!passagers || passagers<=0 || passagers>trajet.placesDisponibles){ showToast("Nombre de passagers invalide."); return; }
+      if(!confirm(`Payer ce trajet directement avec ton solde (${Number(trajet.prixTotal||0).toLocaleString('fr-FR')} FCFA) ?`)) return;
+      b.disabled = true; b.textContent = 'Paiement en cours...';
+      try{
+        const payFn = cloudFunctions.httpsCallable('payReservationFromWallet');
+        await payFn({type:'trajet', id: trajetId, passagers});
+        showToast("Payé avec ton solde ! Réservation confirmée.");
+      }catch(err){
+        showToast("Erreur : " + (err.message || "paiement impossible."));
+        b.disabled = false; b.textContent = '💳 Payer avec mon solde';
+      }
+    };
+  });
+
+  document.querySelectorAll('[data-book-trajet-propose]').forEach(b=>{
+    b.onclick = async ()=>{
+      const trajetId = b.dataset.bookTrajetPropose;
+      const trajet = state.trajetsProposes.find(t=>t.id===trajetId);
+      if(!trajet) return;
+      const passagersStr = prompt(`Combien de passagers ? (max ${trajet.placesDisponibles})`, String(trajet.placesDisponibles));
+      if(passagersStr===null) return;
+      const passagers = Number(passagersStr);
+      if(!passagers || passagers<=0 || passagers>trajet.placesDisponibles){ showToast("Nombre de passagers invalide."); return; }
+      if(!confirm(`Réserver ce trajet avec ${trajet.chauffeurNom} pour ${Number(trajet.prixTotal||0).toLocaleString('fr-FR')} FCFA ?`)) return;
+      try{
+        // Transaction : verifie que le trajet est toujours ouvert et qu'il
+        // n'y a pas de conflit bus/chauffeur avant de creer la reservation,
+        // pour eviter que deux clients ne reservent le meme trajet en meme temps.
+        await db.runTransaction(async (tx)=>{
+          const trajetRef = db.collection('trajetsProposes').doc(trajetId);
+          const trajetSnap = await tx.get(trajetRef);
+          if(!trajetSnap.exists()) throw new Error("Ce trajet n'est plus disponible.");
+          const tData = trajetSnap.data();
+          if(tData.statut !== 'ouvert') throw new Error("Ce trajet vient d'être réservé par quelqu'un d'autre.");
+          const conflict = findBookingConflict(tData.dateEvenement, tData.busId, tData.chauffeurId, null);
+          if(conflict) throw new Error("Ce chauffeur (ou ce bus) est déjà pris ce jour-là.");
+          const resRef = db.collection('reservations').doc();
+          tx.set(resRef, {
+            clientId: state.user.uid,
+            clientNom: state.profile.nom || state.profile.email,
+            clientTelephone: state.profile.telephone || '',
+            typeEvenement: "Trajet proposé",
+            dateEvenement: tData.dateEvenement,
+            lieuDepart: tData.lieuDepart, lieuArrivee: tData.lieuArrivee,
+            nbPassagers: passagers,
+            equipementsSouhaites: [],
+            notes: '',
+            statut: 'confirmee',
+            busId: tData.busId||null, busImmat: tData.busImmat||null, busEquipements: tData.busEquipements||null,
+            chauffeurId: tData.chauffeurId, chauffeurNom: tData.chauffeurNom, chauffeurTelephone: tData.chauffeurTelephone||'',
+            prix: tData.prixTotal, commission: tData.commission, montantChauffeur: tData.prixPropose,
+            paiementStatut: 'non_paye',
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          tx.update(trajetRef, {statut:'reserve'});
+        });
+        showToast("Trajet réservé ! Retrouve-le dans « Mes réservations ».");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
   const us = document.getElementById('userSearch');
   if(us) us.oninput = ()=>{ state.userSearch = us.value; const p=us.selectionStart; renderPanel(); const n=document.getElementById('userSearch'); if(n){ n.focus(); n.setSelectionRange(p,p); } };
 
@@ -1671,7 +2146,8 @@ function bindPanelEvents(){
 
 /* ================= FIRESTORE LISTENERS ================= */
 let unsubs = [];
-function clearListeners(){ unsubs.forEach(u=>u()); unsubs = []; }
+let unsubProfile = null;
+function clearListeners(){ unsubs.forEach(u=>u()); unsubs = []; if(unsubProfile){ unsubProfile(); unsubProfile = null; } }
 
 function attachListeners(){
   clearListeners();
@@ -1726,12 +2202,98 @@ function attachListeners(){
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute chauffeurs:', err)));
   }
+
+  if(role === 'chauffeur'){
+    // Le parc de bus n'a rien de sensible (pas de donnees client) : le
+    // chauffeur peut le lire pour choisir un bus quand il propose un prix.
+    unsubs.push(db.collection('buses').onSnapshot(snap=>{
+      state.buses = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute buses:', err)));
+
+    // Marche des demandes ouvertes : accessible a TOUS les chauffeurs (pas
+    // seulement le chauffeur deja assigne), pour qu'ils puissent proposer
+    // un prix. On n'y montre volontairement pas le nom/telephone du client
+    // (voir chauffeurOffreCard) tant que l'offre n'est pas acceptee.
+    // ATTENTION : ceci demande d'ouvrir firestore.rules pour permettre a
+    // tout chauffeur authentifie de lire les reservations statut=='en_attente'.
+    unsubs.push(db.collection('reservations').where('statut','==','en_attente').onSnapshot(snap=>{
+      state.openRequests = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute demandes ouvertes:', err)));
+
+    // Ses propres offres envoyees (tous statuts, pour voir acceptees/refusees).
+    unsubs.push(db.collection('propositions').where('chauffeurId','==', uid).onSnapshot(snap=>{
+      state.myPropositions = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute mes propositions:', err)));
+
+    // Ses propres trajets publies (tous statuts : ouvert/reserve/annule).
+    unsubs.push(db.collection('trajetsProposes').where('chauffeurId','==', uid).onSnapshot(snap=>{
+      state.mesTrajetsProposes = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute mes trajets publiés:', err)));
+  }
+
+  if(role === 'client'){
+    // Offres recues par les chauffeurs sur les demandes de CE client
+    // uniquement (filtre par clientId, denormalise sur chaque proposition).
+    unsubs.push(db.collection('propositions').where('clientId','==', uid).onSnapshot(snap=>{
+      state.propositions = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute propositions reçues:', err)));
+
+    // Trajets publies par n'importe quel chauffeur, encore ouverts aux
+    // reservations : le client peut les parcourir/rechercher et reserver
+    // directement, sans avoir besoin de faire sa propre demande d'abord.
+    unsubs.push(db.collection('trajetsProposes').where('statut','==','ouvert').onSnapshot(snap=>{
+      state.trajetsProposes = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute trajets proposés:', err)));
+
+    // Historique de ses recharges de portefeuille (PayTech).
+    unsubs.push(db.collection('rechargements').where('clientId','==', uid).onSnapshot(snap=>{
+      state.rechargements = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      }).sort((a,b)=>b._ts-a._ts);
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute recharges:', err)));
+  }
 }
+
+/* ================= RETOUR PAYTECH (success_url / cancel_url) ================= */
+(function handlePaytechReturn(){
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('paytech');
+  if(status === 'success'){
+    setTimeout(()=>showToast("Paiement reçu ! Ton solde sera crédité dans quelques instants."), 500);
+  } else if(status === 'cancel'){
+    setTimeout(()=>showToast("Paiement annulé."), 500);
+  }
+  if(status){
+    params.delete('paytech');
+    const clean = window.location.pathname + (params.toString() ? '?'+params.toString() : '');
+    window.history.replaceState({}, '', clean);
+  }
+})();
 
 /* ================= AUTH STATE ================= */
 auth.onAuthStateChanged(async (user)=>{
   if(!user){
     state.user = null; state.profile = null; state.authLoading = false; clearListeners();
+    state.openRequests = []; state.propositions = []; state.myPropositions = []; state.proposingFor = null;
+    state.trajetsProposes = []; state.mesTrajetsProposes = []; state.clientTrajetSearch = ''; state.editingTrajet = null;
+    state.rechargements = [];
     render();
     return;
   }
@@ -1746,9 +2308,55 @@ auth.onAuthStateChanged(async (user)=>{
   state.activePanel = null;
   state.authLoading = false;
   attachListeners();
+  // Ecoute en direct de son propre profil (surtout utile pour le solde du
+  // portefeuille, credite/debite depuis les Cloud Functions PayTech).
+  unsubProfile = db.collection('users').doc(user.uid).onSnapshot(snap=>{
+    if(snap.exists){ state.profile = snap.data(); if(document.getElementById('root')) render(); }
+  }, err=>console.error('Erreur écoute profil:', err));
   render();
 });
 
+
+/* ================= COUNTDOWN EN DIRECT ================= */
+// Met a jour l'affichage "Expire dans mm:ss" sans re-render complet,
+// pour tous les elements .countdown-timer presents a l'ecran (chauffeur
+// et admin).
+setInterval(()=>{
+  document.querySelectorAll('.countdown-timer[data-expires]').forEach(el=>{
+    const expires = Number(el.dataset.expires);
+    const diff = expires - Date.now();
+    if(diff<=0){
+      el.textContent = '⏳ Délai expiré — en cours de réattribution';
+      el.style.color = 'var(--red)';
+      el.style.background = '#FBE4DE';
+      return;
+    }
+    const m = Math.floor(diff/60000);
+    const s = Math.floor((diff%60000)/1000);
+    el.textContent = `⏳ Expire dans ${m}:${String(s).padStart(2,'0')}`;
+  });
+}, 1000);
+
+/* ================= EXPIRATION AUTO (cote admin) ================= */
+// Sans backend/Cloud Function, c'est la session admin ouverte qui verifie
+// periodiquement les trajets en attente_chauffeur perimes et les repasse
+// en_attente pour reassignation. Si aucun admin n'est connecte au moment
+// de l'expiration, ca sera rattrape a la prochaine ouverture d'une session
+// admin (le countdown cote chauffeur affichera deja "Délai expiré").
+setInterval(()=>{
+  if(!state.profile || state.profile.role !== 'admin') return;
+  const now = Date.now();
+  state.reservations.forEach(r=>{
+    if(r.statut==='attente_chauffeur' && r.expiresAt && r.expiresAt < now){
+      db.collection('reservations').doc(r.id).update({
+        statut:'en_attente',
+        busId:null, busImmat:null, busEquipements:null,
+        chauffeurId:null, chauffeurNom:null,
+        expiresAt:null
+      }).catch(e=>console.error('Erreur expiration auto', e));
+    }
+  });
+}, 20000);
 
 render();
 </script>
