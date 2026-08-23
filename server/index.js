@@ -125,32 +125,96 @@ app.post("/api/ipn", async (req, res) => {
   }
 });
 
-// 3. Payer une réservation depuis le wallet
+// 3. Payer depuis le wallet — supporte une offre (proposition) ou un trajet publié
 app.post("/api/pay-from-wallet", verifyAuth, async (req, res) => {
-  const { reservationId, amount } = req.body;
+  const { type, id, passagers } = req.body;
   const uid = req.uid;
 
-  if (!reservationId || !amount) {
-    return res.status(400).json({ error: "reservationId et amount sont requis." });
+  if (!type || !id) {
+    return res.status(400).json({ error: "type et id sont requis." });
   }
 
   const userRef = db.collection("users").doc(uid);
-  const reservationRef = db.collection("reservations").doc(reservationId);
 
   try {
     await db.runTransaction(async (transaction) => {
       const userDoc = await transaction.get(userRef);
       if (!userDoc.exists) throw new Error("Utilisateur introuvable.");
+      const currentBalance = userDoc.data().solde || 0;
 
-      const currentBalance = userDoc.data().walletBalance || 0;
-      if (currentBalance < amount) throw new Error("Solde insuffisant.");
+      if (type === "proposition") {
+        const propRef = db.collection("propositions").doc(id);
+        const propDoc = await transaction.get(propRef);
+        if (!propDoc.exists) throw new Error("Offre introuvable.");
+        const prop = propDoc.data();
+        if (prop.clientId !== uid) throw new Error("Cette offre ne t'appartient pas.");
+        if (prop.statut !== "en_attente") throw new Error("Cette offre n'est plus disponible.");
 
-      transaction.update(userRef, { walletBalance: admin.firestore.FieldValue.increment(-amount) });
-      transaction.update(reservationRef, {
-        status: "paid",
-        paidVia: "wallet",
-        paidAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+        const prix = Number(prop.prixTotal || 0);
+        if (currentBalance < prix) throw new Error("Solde insuffisant.");
+
+        const resRef = db.collection("reservations").doc(prop.reservationId);
+        const resDoc = await transaction.get(resRef);
+        if (!resDoc.exists || resDoc.data().statut !== "en_attente") {
+          throw new Error("Cette demande n'est plus disponible.");
+        }
+
+        transaction.update(userRef, { solde: currentBalance - prix });
+        transaction.update(resRef, {
+          statut: "confirmee",
+          chauffeurId: prop.chauffeurId,
+          chauffeurNom: prop.chauffeurNom,
+          chauffeurTelephone: prop.chauffeurTelephone || "",
+          busId: prop.busId || null,
+          busImmat: prop.busImmat || null,
+          busEquipements: prop.busEquipements || null,
+          prix: prix,
+          commission: prop.commission,
+          montantChauffeur: prop.prixPropose,
+          paiementStatut: "paye",
+        });
+        transaction.update(propRef, { statut: "acceptee" });
+      } else if (type === "trajet") {
+        const trajetRef = db.collection("trajetsProposes").doc(id);
+        const trajetDoc = await transaction.get(trajetRef);
+        if (!trajetDoc.exists) throw new Error("Trajet introuvable.");
+        const trajet = trajetDoc.data();
+        if (trajet.statut !== "ouvert") throw new Error("Ce trajet n'est plus disponible.");
+
+        const prix = Number(trajet.prixTotal || 0);
+        if (currentBalance < prix) throw new Error("Solde insuffisant.");
+        if (!passagers || passagers <= 0 || passagers > trajet.placesDisponibles) {
+          throw new Error("Nombre de passagers invalide.");
+        }
+
+        const resRef = db.collection("reservations").doc();
+        transaction.set(resRef, {
+          clientId: uid,
+          typeEvenement: "Trajet proposé",
+          dateEvenement: trajet.dateEvenement,
+          lieuDepart: trajet.lieuDepart,
+          lieuArrivee: trajet.lieuArrivee,
+          nbPassagers: passagers,
+          equipementsSouhaites: [],
+          notes: "",
+          statut: "confirmee",
+          busId: trajet.busId || null,
+          busImmat: trajet.busImmat || null,
+          busEquipements: trajet.busEquipements || null,
+          chauffeurId: trajet.chauffeurId,
+          chauffeurNom: trajet.chauffeurNom,
+          chauffeurTelephone: trajet.chauffeurTelephone || "",
+          prix: prix,
+          commission: trajet.commission,
+          montantChauffeur: trajet.prixPropose,
+          paiementStatut: "paye",
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.update(userRef, { solde: currentBalance - prix });
+        transaction.update(trajetRef, { statut: "reserve" });
+      } else {
+        throw new Error("Type de paiement inconnu.");
+      }
     });
 
     return res.json({ success: true });
