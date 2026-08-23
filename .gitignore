@@ -3,3 +3,4 @@ node_modules/
 functions/.env
 server/serviceAccountKey.json
 server/.env
+teranga-trans-firebase-adminsdk-fbsvc-*.json
