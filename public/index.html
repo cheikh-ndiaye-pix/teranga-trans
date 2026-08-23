@@ -2965,49 +2965,20 @@ render();
 </script>
 
 <!-- ================= GESTION DES MISES A JOUR (Service Worker) =================
-     Ce bloc permet aux utilisateurs de recevoir automatiquement les nouvelles
-     versions de l'app (PWA installee sur ecran d'accueil) sans devoir la
-     supprimer/reinstaller. Quand une nouvelle version est deployee sur Vercel,
-     un bandeau discret propose a l'utilisateur de recharger. -->
-<div id="updateBanner" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#0B3D24;color:#FAF6EC;padding:12px 16px;font-family:'IBM Plex Sans',sans-serif;font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -2px 10px rgba(0,0,0,.25);">
-  <span>Une nouvelle version de Teranga Trans est disponible.</span>
-  <button id="updateBannerBtn" style="background:#D4A017;color:#0B3D24;border:none;border-radius:8px;padding:8px 14px;font-weight:600;">Mettre à jour</button>
-</div>
+     Mise a jour 100% automatique et silencieuse : des qu'une nouvelle version
+     est deployee, elle s'active toute seule (voir skipWaiting dans sw.js) et
+     la page se recharge automatiquement, sans bandeau ni bouton a cliquer. -->
 <script>
 (function(){
   if(!('serviceWorker' in navigator)) return;
   // On sert un fichier statique, donc l'URL du SW doit etre relative a la racine du site.
   navigator.serviceWorker.register('sw.js').then(function(reg){
-    // Si un SW est deja en attente (waiting), on propose direct la mise a jour.
-    if(reg.waiting){ showUpdateBanner(reg.waiting); }
-
     // Verifie s'il existe une nouvelle version des l'ouverture de l'app.
     reg.update().catch(function(){});
-
-    reg.addEventListener('updatefound', function(){
-      const newWorker = reg.installing;
-      if(!newWorker) return;
-      newWorker.addEventListener('statechange', function(){
-        if(newWorker.state === 'installed' && navigator.serviceWorker.controller){
-          // Une nouvelle version est prete: propose a l'utilisateur de l'activer.
-          showUpdateBanner(newWorker);
-        }
-      });
-    });
   }).catch(function(err){ console.warn('Service worker non enregistre:', err); });
 
-  function showUpdateBanner(worker){
-    const banner = document.getElementById('updateBanner');
-    const btn = document.getElementById('updateBannerBtn');
-    if(!banner || !btn) return;
-    banner.style.display = 'flex';
-    btn.onclick = function(){
-      worker.postMessage({type:'SKIP_WAITING'});
-    };
-  }
-
-  // Des qu'un nouveau SW prend le controle, on recharge une seule fois
-  // pour afficher la version fraiche.
+  // Des qu'un nouveau SW prend le controle (activation automatique), on
+  // recharge une seule fois pour afficher la version fraiche.
   let refreshing = false;
   navigator.serviceWorker.addEventListener('controllerchange', function(){
     if(refreshing) return;
