@@ -2497,6 +2497,250 @@ function openQrScanModal(resId, expectedToken){
   });
 }
 
+/* =========================================================
+   SUIVI GPS EN DIRECT (chauffeur <-> client)
+   Chaque partie publie sa position dans suivi/{reservationId}
+   et voit celle de l'autre sur une carte, avec distance + ETA.
+   ========================================================= */
+const TRACK_SPEED_KMH = 32;          // vitesse moyenne urbaine Dakar
+const TRACK_MIN_WRITE_MS = 8000;     // ecriture Firestore max toutes les 8s
+const TRACK_STALE_MS = 2 * 60 * 1000;// position consideree "perdue" apres 2 min
+
+let trackWatchId = null;
+let trackWatchResId = null;
+let trackLastWrite = 0;
+let trackUnsub = null;
+let trackMap = null;
+let trackMarkers = {};
+let trackLine = null;
+let trackTick = null;
+
+function trackRole(){
+  const r = state.profile && state.profile.role;
+  return r === 'chauffeur' ? 'chauffeur' : (r === 'client' ? 'client' : 'admin');
+}
+
+function haversineKm(a, b){
+  if(!a || !b) return null;
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function etaText(km){
+  if(km == null) return '—';
+  const min = Math.max(1, Math.round((km / TRACK_SPEED_KMH) * 60));
+  if(min < 60) return `${min} min`;
+  return `${Math.floor(min/60)} h ${String(min%60).padStart(2,'0')}`;
+}
+
+function distText(km){
+  if(km == null) return '—';
+  return km < 1 ? `${Math.round(km*1000)} m` : `${km.toFixed(1)} km`;
+}
+
+/* Ecrit ma position (throttlee) pour une reservation donnee. */
+async function pushMyPosition(resId, coords, force){
+  const now = Date.now();
+  if(!force && now - trackLastWrite < TRACK_MIN_WRITE_MS) return;
+  trackLastWrite = now;
+  const who = trackRole();
+  if(who === 'admin') return;
+  const payload = {
+    reservationId: resId,
+    updatedAt: now
+  };
+  payload[who === 'chauffeur' ? 'chauffeurPos' : 'clientPos'] = {
+    lat: coords.latitude,
+    lng: coords.longitude,
+    precision: Math.round(coords.accuracy || 0),
+    vitesse: coords.speed != null && coords.speed >= 0 ? Math.round(coords.speed * 3.6) : null,
+    ts: now,
+    nom: (state.profile && state.profile.nom) || ''
+  };
+  try {
+    await db.collection('suivi').doc(resId).set(payload, {merge:true});
+  } catch(e){ console.error('Erreur envoi position', e); }
+}
+
+/* Demarre/arrete le partage GPS selon la reservation active. */
+function startSharing(resId){
+  if(!navigator.geolocation) return false;
+  if(trackWatchId != null && trackWatchResId === resId) return true;
+  stopSharing();
+  trackWatchResId = resId;
+  trackWatchId = navigator.geolocation.watchPosition(
+    pos => pushMyPosition(resId, pos.coords, false),
+    err => console.warn('GPS indisponible', err && err.message),
+    {enableHighAccuracy:true, maximumAge:5000, timeout:20000}
+  );
+  return true;
+}
+function stopSharing(){
+  if(trackWatchId != null){ navigator.geolocation.clearWatch(trackWatchId); }
+  trackWatchId = null; trackWatchResId = null;
+}
+
+/* Trajet en cours = celui qu'on suit automatiquement en arriere-plan. */
+function activeTripForMe(){
+  const role = trackRole();
+  if(role === 'admin') return null;
+  const uid = state.user && state.user.uid;
+  if(!uid) return null;
+  return state.reservations.find(r =>
+    (r.statut === 'en_route' || r.statut === 'confirmee') &&
+    (role === 'chauffeur' ? r.chauffeurId === uid : r.clientId === uid)
+  ) || null;
+}
+
+function syncBackgroundSharing(){
+  if(!state.user || !state.profile) { stopSharing(); return; }
+  const trip = activeTripForMe();
+  if(trip) startSharing(trip.id);
+  else if(!document.getElementById('trackModalOverlay')) stopSharing();
+}
+
+/* ---------- Modale carte ---------- */
+function openTrackingModal(resId){
+  const res = state.reservations.find(r=>r.id===resId);
+  const old = document.getElementById('trackModalOverlay');
+  if(old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'trackModalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.35);">
+      <div style="background:var(--night);color:var(--cream);padding:14px 18px;">
+        <div style="font-weight:700;font-size:15px;">Suivi en direct</div>
+        <div style="font-size:12px;opacity:.8;margin-top:2px;">${res ? esc(res.lieuDepart) + ' → ' + esc(res.lieuArrivee) : 'Trajet'}</div>
+      </div>
+      <div id="trackMap" style="height:300px;width:100%;background:#EDE8DA;"></div>
+      <div style="padding:14px 18px 18px;">
+        <div style="display:flex;gap:10px;text-align:center;margin-bottom:10px;">
+          <div style="flex:1;background:var(--cream);border-radius:10px;padding:10px;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);">Distance</div>
+            <div id="trackDist" class="mono" style="font-size:18px;font-weight:700;color:var(--night);">—</div>
+          </div>
+          <div style="flex:1;background:var(--cream);border-radius:10px;padding:10px;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);">Temps estimé</div>
+            <div id="trackEta" class="mono" style="font-size:18px;font-weight:700;color:var(--gold);">—</div>
+          </div>
+        </div>
+        <div id="trackInfo" style="font-size:12.5px;color:var(--ink-soft);line-height:1.6;margin-bottom:12px;">Recherche du signal GPS…</div>
+        <button class="btn-sm btn-ghost" id="trackCloseBtn" style="width:100%;">Fermer</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = ()=>{
+    overlay.remove();
+    if(trackUnsub){ trackUnsub(); trackUnsub = null; }
+    if(trackTick){ clearInterval(trackTick); trackTick = null; }
+    if(trackMap){ trackMap.remove(); trackMap = null; }
+    trackMarkers = {}; trackLine = null;
+    syncBackgroundSharing();
+  };
+  overlay.onclick = e => { if(e.target === overlay) close(); };
+  document.getElementById('trackCloseBtn').onclick = close;
+
+  // Je partage ma position tant que la carte est ouverte
+  const role = trackRole();
+  if(role !== 'admin'){
+    if(!navigator.geolocation){
+      document.getElementById('trackInfo').textContent = "Ce téléphone ne permet pas la géolocalisation.";
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        p => pushMyPosition(resId, p.coords, true),
+        e => {
+          const info = document.getElementById('trackInfo');
+          if(info) info.innerHTML = "⚠️ Position refusée. Autorise la localisation dans les réglages du téléphone pour être visible par l'autre partie.";
+        },
+        {enableHighAccuracy:true, timeout:20000}
+      );
+      startSharing(resId);
+    }
+  }
+
+  if(!window.L){
+    document.getElementById('trackMap').innerHTML = '<div style="padding:20px;text-align:center;font-size:13px;color:#5B6358;">Carte indisponible (pas de connexion). Les distances restent affichées.</div>';
+  } else {
+    trackMap = L.map('trackMap', {zoomControl:true, attributionControl:false}).setView([14.7167, -17.4677], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(trackMap);
+    setTimeout(()=>{ if(trackMap) trackMap.invalidateSize(); }, 200);
+  }
+
+  const icon = (emoji, color) => window.L ? L.divIcon({
+    className:'',
+    html:`<div style="background:${color};color:#fff;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 3px 10px rgba(0,0,0,.35);border:2px solid #fff;">${emoji}</div>`,
+    iconSize:[34,34], iconAnchor:[17,17]
+  }) : null;
+
+  let latest = {};
+  const paint = ()=>{
+    const d = latest || {};
+    const bus = d.chauffeurPos, cli = d.clientPos;
+    const km = haversineKm(bus, cli);
+    const distEl = document.getElementById('trackDist');
+    const etaEl = document.getElementById('trackEta');
+    const infoEl = document.getElementById('trackInfo');
+    if(!distEl) return;
+    distEl.textContent = distText(km);
+    etaEl.textContent = etaText(km);
+
+    const now = Date.now();
+    const line = (label, pos, self) => {
+      if(!pos) return `<div>${label} : <b>en attente de sa position…</b></div>`;
+      const age = Math.round((now - (pos.ts||0))/1000);
+      const stale = (now - (pos.ts||0)) > TRACK_STALE_MS;
+      return `<div>${label}${pos.nom?` (${esc(pos.nom)})`:''} : <b style="color:${stale?'var(--red)':'var(--night)'}">${stale?'signal perdu':'en direct'}</b>`
+        + ` — maj il y a ${age < 60 ? age + ' s' : Math.round(age/60) + ' min'}`
+        + (pos.vitesse != null ? ` • ${pos.vitesse} km/h` : '')
+        + (self ? ' • c\'est toi' : '') + `</div>`;
+    };
+    infoEl.innerHTML =
+      line('🚌 Chauffeur', bus, role==='chauffeur') +
+      line('🧍 Client', cli, role==='client') +
+      (km != null ? `<div style="margin-top:6px;color:var(--night);">Arrivée estimée du bus vers <b>${new Date(Date.now() + Math.max(1, Math.round(km/TRACK_SPEED_KMH*60))*60000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</b></div>` : '');
+
+    if(!trackMap || !window.L) return;
+    const pts = [];
+    [['bus', bus, '🚌', '#0B3D24'], ['cli', cli, '🧍', '#C1272D']].forEach(([key, pos, emoji, color])=>{
+      if(!pos) return;
+      const ll = [pos.lat, pos.lng];
+      pts.push(ll);
+      if(trackMarkers[key]) trackMarkers[key].setLatLng(ll);
+      else trackMarkers[key] = L.marker(ll, {icon: icon(emoji, color)}).addTo(trackMap);
+    });
+    if(pts.length === 2){
+      if(trackLine) trackLine.setLatLngs(pts);
+      else trackLine = L.polyline(pts, {color:'#D4A017', weight:4, dashArray:'8 8'}).addTo(trackMap);
+      trackMap.fitBounds(pts, {padding:[45,45], maxZoom:15});
+    } else if(pts.length === 1){
+      trackMap.setView(pts[0], 14);
+    }
+  };
+
+  trackUnsub = db.collection('suivi').doc(resId).onSnapshot(snap=>{
+    latest = snap.exists ? snap.data() : {};
+    paint();
+  }, err=>{
+    console.error('Erreur écoute suivi', err);
+    const info = document.getElementById('trackInfo');
+    if(info) info.textContent = "Impossible de lire le suivi pour l'instant.";
+  });
+  trackTick = setInterval(paint, 5000);
+  paint();
+}
+
+/* Ouverture via delegation (les cartes sont re-rendues en permanence). */
+document.addEventListener('click', e=>{
+  const btn = e.target.closest && e.target.closest('[data-track-res]');
+  if(!btn) return;
+  openTrackingModal(btn.dataset.trackRes);
+});
+
 /* ================= FIRESTORE LISTENERS ================= */
 let unsubs = [];
 let unsubProfile = null;
@@ -2710,6 +2954,9 @@ setInterval(()=>{
     }
   });
 }, 20000);
+
+// Partage GPS automatique en arriere-plan (chauffeur en route / client attendu)
+setInterval(syncBackgroundSharing, 15000);
 
 render();
 </script>
