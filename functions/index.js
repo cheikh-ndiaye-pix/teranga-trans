@@ -1,215 +1,2991 @@
-const functions = require("firebase-functions");
-const admin = require("firebase-admin");
-const fetch = require("node-fetch"); // si erreur, fais "npm install node-fetch@2" dans functions/
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Teranga Trans — Réservation de bus pour événements</title>
+<meta name="theme-color" content="#0B3D24">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Teranga Trans">
+<link rel="apple-touch-icon" href="icon.jpg?v=1">
+<link rel="manifest" href="manifest.json?v=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --night:#0B3D24;
+    --night-2:#072B19;
+    --gold:#D4A017;
+    --gold-light:#F4D35E;
+    --cream:#FAF6EC;
+    --paper:#FFFDF8;
+    --ink:#1D2420;
+    --ink-soft:#5B6358;
+    --confirm-blue:#2A5FAE;
+    --green:#0B3D24;
+    --red:#CE1126;
+    --line:#E4DCC5;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'IBM Plex Sans',sans-serif;background:var(--cream);color:var(--ink);}
+  h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif;}
+  .mono{font-family:'IBM Plex Mono',monospace;letter-spacing:.02em;}
+  button{font-family:inherit;cursor:pointer;}
+  input,select,textarea{font-family:inherit;}
 
-admin.initializeApp();
-const db = admin.firestore();
+  /* ---------- Top bar ---------- */
+  header.topbar{
+    background:var(--night);
+    color:var(--cream);
+    padding:16px 24px;
+    display:flex;align-items:center;justify-content:space-between;
+    position:sticky;top:0;z-index:20;
+    box-shadow:0 2px 12px rgba(0,0,0,.12);
+  }
+  header.topbar .brand{display:flex;align-items:center;gap:10px;}
+  header.topbar .brand svg{width:30px;height:30px;}
+  header.topbar h1{font-size:20px;margin:0;font-weight:700;letter-spacing:.02em;}
+  header.topbar .role-pill{
+    font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    background:var(--gold);color:var(--night-2);padding:4px 10px;border-radius:20px;font-weight:600;
+  }
+  header.topbar .who{display:flex;align-items:center;gap:12px;font-size:13px;}
+  header.topbar button.logout{
+    background:transparent;border:1px solid rgba(250,246,236,.4);color:var(--cream);
+    padding:6px 12px;border-radius:8px;font-size:13px;
+  }
+  header.topbar button.logout:hover{background:rgba(250,246,236,.1);}
 
-// Clés PayTech depuis les variables d'environnement (.env)
-const PAYTECH_API_KEY = process.env.PAYTECH_API_KEY;
-const PAYTECH_API_SECRET = process.env.PAYTECH_API_SECRET;
-const PAYTECH_ENV = process.env.PAYTECH_ENV || "test"; // "test" ou "prod"
-const APP_BASE_URL = process.env.APP_BASE_URL;
+  /* signature: Senegalese tricolor flag stripe beneath the header */
+  .road-divider{
+    height:4px;width:100%;
+    display:flex;
+  }
+  .road-divider span{flex:1;}
+  .road-divider .s-green{background:var(--night);}
+  .road-divider .s-gold{background:var(--gold);}
+  .road-divider .s-red{background:var(--red);}
 
-/**
- * 1. createPaytechPayment
- * Fonction callable : le client l'appelle pour démarrer un paiement PayTech.
- * Attend { amount, itemName, ref_command } depuis le client.
- */
-exports.createPaytechPayment = functions.https.onCall(async (data, context) => {
-  // Vérifie que l'utilisateur est connecté
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-      "unauthenticated",
-      "Tu dois être connecté pour effectuer un paiement."
-    );
+  main{max-width:1080px;margin:0 auto;padding:28px 20px 80px;}
+
+  /* ---------- Auth screen ---------- */
+  .auth-wrap{
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:var(--night);
+    padding:20px;
+    position:relative;
+    overflow:hidden;
+  }
+  .auth-wrap::before{
+    content:'';position:absolute;inset:0;
+    background-image:radial-gradient(rgba(250,246,236,.05) 1px, transparent 1px);
+    background-size:26px 26px;
+    pointer-events:none;
+  }
+  .auth-card{
+    background:var(--paper);border-radius:20px;width:100%;max-width:420px;
+    box-shadow:0 40px 80px rgba(0,0,0,.4);
+    overflow:hidden;
+    position:relative;
+    animation:cardIn .5s ease-out;
+  }
+  @keyframes cardIn{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+  .auth-hero{width:100%;height:auto;display:block;}
+  .hero-photo{position:relative;line-height:0;}
+  .hero-photo img{width:100%;height:200px;object-fit:cover;display:block;}
+  .hero-photo .hero-veil{position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,61,36,.15) 0%,rgba(11,61,36,.35) 45%,rgba(11,61,36,.92) 100%);}
+  .hero-photo .hero-txt{position:absolute;left:24px;right:24px;bottom:14px;line-height:1.25;}
+  .hero-photo .hero-txt h2{margin:0;color:#FAF6EC;font-size:22px;letter-spacing:.2px;}
+  .hero-photo .hero-txt p{margin:4px 0 0;color:#F4D35E;font-size:12.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;}
+  .hero-flag{position:absolute;top:0;left:0;right:0;height:4px;display:flex;}
+  .hero-flag i{flex:1;display:block;}
+  .hero-flag i:nth-child(1){background:#0B8A3D;} .hero-flag i:nth-child(2){background:#F4D35E;} .hero-flag i:nth-child(3){background:#C1272D;}
+  .user-table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  .user-table th{text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);padding:8px 10px;border-bottom:1px solid rgba(0,0,0,.08);}
+  .user-table td{padding:10px;border-bottom:1px solid rgba(0,0,0,.05);vertical-align:middle;}
+  .tag{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:600;}
+  .tag-admin{background:#0B3D24;color:#F4D35E;} .tag-chauffeur{background:#F4D35E;color:#0B3D24;} .tag-client{background:rgba(0,0,0,.07);color:var(--night);}
+  .auth-card-body{padding:30px 32px 36px;}
+  .auth-card .logo-line{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+  .auth-card h1{font-size:26px;margin:0;color:var(--night);}
+  .auth-card p.tagline{color:var(--ink-soft);margin:4px 0 24px;font-size:14px;}
+  .tabs{display:flex;gap:6px;margin-bottom:20px;background:var(--cream);padding:4px;border-radius:10px;}
+  .tabs button{flex:1;border:none;background:transparent;padding:9px 0;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink-soft);transition:background .15s,color .15s;}
+  .tabs button.active{background:var(--night);color:var(--cream);}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;}
+  .field input, .field select{
+    width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;background:#fff;
+    transition:border-color .15s,box-shadow .15s;
+  }
+  .field input:hover, .field select:hover{border-color:var(--ink-soft);}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--confirm-blue);box-shadow:0 0 0 3px rgba(42,95,174,.15);}
+  .role-choice{display:flex;gap:8px;}
+  .role-choice label{
+    flex:1;border:1px solid var(--line);border-radius:9px;padding:10px;text-align:center;font-size:13px;font-weight:600;
+    cursor:pointer;color:var(--ink-soft);transition:border-color .15s,background .15s,color .15s;
+  }
+  .role-choice label:hover{border-color:var(--gold);}
+  .role-choice input{display:none;}
+  .role-choice input:checked + span{color:var(--night);}
+  .role-choice label:has(input:checked){border-color:var(--gold);background:#FBF1DE;}
+  .equip-choice{display:flex;gap:8px;flex-wrap:wrap;}
+  .equip-choice label{
+    display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:9px;padding:9px 12px;
+    font-size:13px;font-weight:600;cursor:pointer;color:var(--ink-soft);transition:border-color .15s,background .15s,color .15s;
+  }
+  .equip-choice label:hover{border-color:var(--gold);}
+  .equip-choice input{display:none;}
+  .equip-choice input:checked + span{color:var(--night);}
+  .equip-choice label:has(input:checked){border-color:var(--gold);background:#FBF1DE;}
+  .equip-badges{display:inline-flex;gap:6px;flex-wrap:wrap;}
+  .equip-badge{
+    display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;padding:3px 9px;
+    border-radius:20px;background:rgba(0,0,0,.06);color:var(--night);
+  }
+  .btn-primary{
+    width:100%;background:var(--night);color:var(--cream);border:none;padding:13px;border-radius:9px;
+    font-weight:600;font-size:14.5px;margin-top:6px;transition:background .15s,transform .1s;
+  }
+  .btn-primary:hover{background:var(--night-2);}
+  .btn-primary:active{transform:scale(.98);}
+  .btn-primary:disabled{opacity:.5;cursor:default;transform:none;}
+  .auth-msg{font-size:13px;margin-top:12px;padding:10px 12px;border-radius:8px;}
+  .auth-msg.error{background:#FBE4DE;color:var(--red);}
+  .auth-msg.info{background:#E6EDF7;color:var(--confirm-blue);}
+  .auth-msg.success{background:#E1F0E6;color:var(--night);}
+
+  /* ---------- Nav tabs (dashboards) ---------- */
+  .dash-nav{display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap;}
+  .dash-nav button{
+    background:#fff;border:1px solid var(--line);padding:9px 16px;border-radius:24px;font-size:13.5px;font-weight:600;color:var(--ink-soft);
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .dash-nav button:hover{border-color:var(--night);color:var(--night);}
+  .dash-nav button.active{background:var(--night);border-color:var(--night);color:var(--cream);}
+
+  section.panel{display:none;}
+  section.panel.active{display:block;}
+
+  .section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+  .section-title h2{font-size:19px;margin:0;color:var(--night);}
+  .count-badge{background:var(--gold);color:var(--night-2);font-size:12px;font-weight:700;padding:2px 9px;border-radius:12px;}
+
+  /* ---------- Admin overview stat cards ---------- */
+  .stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  @media(max-width:760px){.stat-grid{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:480px){.stat-grid{grid-template-columns:1fr;}}
+  .stat-card{
+    background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px 20px;box-shadow:0 1px 3px rgba(11,61,36,.05);
+    border-top:3px solid var(--night);
+  }
+  .stat-value{font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:700;line-height:1.1;}
+  .stat-label{font-size:12.5px;color:var(--ink-soft);margin-top:4px;font-weight:600;}
+  .stat-sub{font-size:11.5px;color:var(--ink-soft);margin-top:6px;opacity:.8;}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(11,61,36,.05);}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  @media(max-width:640px){.grid-2{grid-template-columns:1fr;}}
+
+  /* ---------- Ticket stub card (signature element) ---------- */
+  .ticket{
+    position:relative;
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:12px;
+    display:flex;
+    margin-bottom:18px;
+    overflow:hidden;
+    box-shadow:0 3px 10px rgba(11,61,36,.07);
+    transition:box-shadow .18s,transform .18s;
+  }
+  .ticket:hover{box-shadow:0 8px 22px rgba(11,61,36,.13);transform:translateY(-1px);}
+  .ticket .stub-main{flex:1;padding:18px 20px;}
+  .ticket .stub-side{
+    width:120px;background:var(--night);color:var(--cream);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:14px 10px;position:relative;
+  }
+  .ticket .perforation{
+    width:0;border-left:2px dashed var(--line);position:relative;
+  }
+  .ticket .perforation::before, .ticket .perforation::after{
+    content:'';position:absolute;left:-9px;width:18px;height:18px;background:var(--cream);border-radius:50%;
+  }
+  .ticket .perforation::before{top:-9px;}
+  .ticket .perforation::after{bottom:-9px;}
+  .ticket .route-row{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--night);font-size:15.5px;margin-bottom:4px;}
+  .ticket .route-row svg{width:16px;height:16px;flex-shrink:0;color:var(--gold);}
+  .ticket .meta-row{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:12.5px;color:var(--ink-soft);}
+  .ticket .meta-row b{color:var(--ink);font-weight:600;}
+  .ticket .stub-side .status-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--gold-light);margin-bottom:4px;}
+  .ticket .stub-side .status-value{font-weight:700;font-size:13px;text-align:center;line-height:1.3;}
+  .ticket .stub-side .seat-code{margin-top:8px;font-size:11px;opacity:.8;}
+
+  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;}
+  .st-en_attente{background:var(--gold);}
+  .st-attente_chauffeur{background:#E08A1E;}
+  .st-confirmee{background:var(--confirm-blue);}
+  .st-refusee{background:var(--red);}
+  .st-en_route{background:#4A6FE0;}
+  .st-terminee{background:var(--green);}
+  .st-annulee{background:var(--ink-soft);}
+  .countdown-timer{font-size:12px;font-weight:700;color:#E08A1E;margin-top:6px;display:inline-block;background:#FBF1DE;padding:4px 10px;border-radius:20px;}
+  .loading-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--night);}
+  .loading-wrap .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(250,246,236,.25);border-top-color:var(--gold);animation:spin 0.8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .star-row{display:flex;gap:4px;}
+  .star-row button{background:transparent;border:none;font-size:22px;line-height:1;color:var(--line);padding:2px;cursor:pointer;}
+  .star-row button.filled{color:var(--gold);}
+  .pay-badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:20px;}
+  .pay-badge.paye{background:#E1F0E6;color:var(--night);}
+  .pay-badge.non_paye{background:#FBE4DE;color:var(--red);}
+
+  .btn-sm{border:none;padding:7px 13px;border-radius:7px;font-size:12.5px;font-weight:600;transition:filter .15s,transform .1s;}
+  .btn-sm:hover{filter:brightness(1.08);}
+  .btn-sm:active{transform:scale(.97);}
+  .btn-confirm{background:var(--confirm-blue);color:#fff;}
+  .btn-red{background:var(--red);color:#fff;}
+  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--ink-soft);}
+  .btn-ghost:hover{border-color:var(--red);color:var(--red);}
+  .btn-night{background:var(--night);color:var(--cream);}
+  .btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+
+  .empty-state{
+    text-align:center;padding:50px 20px;color:var(--ink-soft);
+  }
+  .empty-state svg{width:44px;height:44px;color:var(--gold);margin-bottom:10px;}
+  .empty-state p{margin:0;font-size:14px;}
+
+  table.fleet{width:100%;border-collapse:collapse;font-size:13.5px;}
+  table.fleet th{text-align:left;color:var(--ink-soft);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--line);}
+  table.fleet td{padding:10px;border-bottom:1px solid var(--line);}
+  table.fleet tr:last-child td{border-bottom:none;}
+
+  .inline-form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;}
+  .inline-form .field{margin-bottom:0;min-width:120px;flex:1;}
+
+  .toast{
+    position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+    background:var(--night);color:var(--cream);padding:12px 20px;border-radius:10px;font-size:13.5px;
+    box-shadow:0 10px 30px rgba(0,0,0,.25);z-index:100;
+  }
+  .assign-box{background:var(--cream);border-radius:10px;padding:14px;margin-top:12px;}
+
+  /* ---------- Photo de fond (ecran de connexion) ---------- */
+  .auth-wrap{
+    background-image:
+      linear-gradient(180deg, rgba(7,43,25,.72) 0%, rgba(11,61,36,.78) 45%, rgba(7,43,25,.94) 100%),
+      url('auth-bg.jpg?v=1') !important;
+    background-size:cover !important;
+    background-position:center !important;
   }
 
-  const { amount, itemName, ref_command } = data;
-
-  if (!amount || !itemName || !ref_command) {
-    throw new functions.https.HttpsError(
-      "invalid-argument",
-      "amount, itemName et ref_command sont requis."
-    );
+  /* ---------- Splash au lancement (app installee) ---------- */
+  #app-splash{
+    position:fixed;inset:0;z-index:9999;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+    background-image:
+      linear-gradient(180deg, rgba(7,43,25,.55) 0%, rgba(11,61,36,.75) 55%, rgba(7,43,25,.96) 100%),
+      url('auth-bg.jpg?v=1');
+    background-size:cover;background-position:center;
+    color:#FAF6EC;text-align:center;padding:24px;
+    transition:opacity .5s ease;
   }
+  #app-splash h1{font-family:'Space Grotesk',sans-serif;margin:0;font-size:30px;letter-spacing:.02em;}
+  #app-splash p{margin:0;color:#F4D35E;font-size:12.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;}
+  #app-splash .splash-flag{display:flex;width:120px;height:4px;border-radius:2px;overflow:hidden;margin-top:8px;}
+  #app-splash .splash-flag i{flex:1;}
+  #app-splash .splash-flag i:nth-child(1){background:#0B8A3D;}
+  #app-splash .splash-flag i:nth-child(2){background:#F4D35E;}
+  #app-splash .splash-flag i:nth-child(3){background:#C1272D;}
+  #app-splash.hide{opacity:0;pointer-events:none;}
+</style>
+</head>
+<body>
 
-  try {
-    const response = await fetch("https://paytech.sn/api/payment/request-payment", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "API_KEY": PAYTECH_API_KEY,
-        "API_SECRET": PAYTECH_API_SECRET,
-      },
-      body: JSON.stringify({
-        item_name: itemName,
-        item_price: amount,
-        currency: "XOF",
-        ref_command: ref_command,
-        command_name: itemName,
-        env: PAYTECH_ENV,
-        ipn_url: `${APP_BASE_URL}/paytechIPN`, // adapte si l'URL de la function diffère
-        success_url: `${APP_BASE_URL}/payment-success`,
-        cancel_url: `${APP_BASE_URL}/payment-cancel`,
-        custom_field: JSON.stringify({ uid: context.auth.uid }),
-      }),
-    });
+<div id="app-splash">
+  <h1>Teranga Trans</h1>
+  <p>Reservation de bus pour evenements</p>
+  <div class="splash-flag"><i></i><i></i><i></i></div>
+</div>
+<script>
+  window.addEventListener('load', function(){
+    setTimeout(function(){
+      var s = document.getElementById('app-splash');
+      if(!s) return;
+      s.classList.add('hide');
+      setTimeout(function(){ if(s.parentNode) s.parentNode.removeChild(s); }, 600);
+    }, 1400);
+  });
+</script>
 
-    const result = await response.json();
+<div id="root"></div>
 
-    if (!response.ok || result.success !== 1) {
-      throw new functions.https.HttpsError(
-        "internal",
-        "Erreur PayTech: " + JSON.stringify(result)
-      );
-    }
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-functions-compat.js"></script>
+<!-- Generation du QR code sur le billet client -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- Scan du QR via la camera du chauffeur (embarquement) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qr-scanner/1.4.2/qr-scanner.umd.min.js"></script>
 
-    // Enregistre la tentative de paiement dans Firestore
-    await db.collection("payments").doc(ref_command).set({
-      uid: context.auth.uid,
-      amount,
-      itemName,
-      status: "pending",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+<script>
+/* =========================================================
+   CONFIGURATION FIREBASE — remplace par les clés de TON
+   projet Firebase (Console > Paramètres du projet).
+   Crée un projet séparé de TataPay pour ne pas mélanger
+   les données.
+   ========================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyDGf24jEjAf-NQGlZOUqraLRS20fRUhPes",
+  authDomain: "teranga-trans.firebaseapp.com",
+  projectId: "teranga-trans",
+  storageBucket: "teranga-trans.firebasestorage.app",
+  messagingSenderId: "437415134819",
+  appId: "1:437415134819:web:f237d44d3dd5286aec5a56"
+};
 
-    return {
-      success: true,
-      redirect_url: result.redirect_url,
-      token: result.token,
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+// Region europe-west1 : doit correspondre a setGlobalOptions() dans functions/index.js
+const cloudFunctions = firebase.app().functions('europe-west1');
+
+// URL du serveur Render qui remplace les anciennes Cloud Functions Firebase
+const SERVER_BASE_URL = "https://teranga-trans.onrender.com";
+
+async function callServer(endpoint, body){
+  const token = await auth.currentUser.getIdToken();
+  const res = await fetch(`${SERVER_BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error || "Erreur serveur");
+  return data;
+}
+
+/* =========================================================
+   ⚠️ ADMIN — LISTE SOURCE UNIQUE (à synchroniser MANUELLEMENT) ⚠️
+
+   Cette liste détermine qui devient automatiquement "Admin"
+   lors de la création d'un compte (comme ADMIN_UID dans TataPay).
+
+   ⚠️⚠️ CETTE MÊME LISTE EXISTE AUSSI DANS firestore.rules ⚠️⚠️
+   (fonction isAdminEmail). Les DEUX listes doivent TOUJOURS
+   être identiques, sinon :
+     - soit le compte devient admin ici mais Firestore refuse
+       l'écriture (permission-denied),
+     - soit Firestore l'autorise alors que ce n'était pas prévu.
+
+   👉 Si tu modifies cette liste, va IMMÉDIATEMENT modifier
+   la liste correspondante dans firestore.rules, puis redéploie
+   les règles avec : firebase deploy --only firestore:rules
+
+   Admin(s) actuel(s) : papacheikh900@gmail.com uniquement.
+   ========================================================= */
+const ADMIN_EMAILS = ["papacheikh900@gmail.com"];
+
+/* =========================================================
+   💰 COMMISSION — modèle Yango simplifié.
+   Le client paie le prix total du trajet (via le lien de
+   paiement, ex: Wave). Teranga Trans garde COMMISSION_RATE
+   du prix, le reste (montantChauffeur) revient au chauffeur/
+   propriétaire du bus (versé manuellement pour l'instant —
+   pas encore de split automatique côté PayTech).
+   Change juste ce nombre pour ajuster le taux (0.12 = 12%).
+   ========================================================= */
+const COMMISSION_RATE = 0.12;
+// Delai laisse au chauffeur pour accepter/refuser un trajet assigne par
+// l'admin avant que la reservation reparte automatiquement en attente.
+const DRIVER_ACCEPT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+// Commission ajoutee par l'application sur chaque prix propose par
+// un chauffeur dans le "marche" des demandes clients (voir plus bas).
+// Contrairement a COMMISSION_RATE (pourcentage retire du prix fixe par
+// l'admin), ici la commission s'AJOUTE au prix que le chauffeur veut
+// recevoir : le client paie prixPropose + commission, le chauffeur touche
+// integralement le prix qu'il a propose.
+// Modele hybride : on prend le plus grand entre un plancher fixe (protege
+// les petites courses) et un pourcentage (capte plus de valeur sur les
+// grosses reservations, ex: bus complet pour evenement).
+const PROPOSITION_COMMISSION_MIN_FCFA = 500;
+const PROPOSITION_COMMISSION_RATE = 0.05; // 5%
+function calcPropositionCommission(prixPropose){
+  const p = Number(prixPropose)||0;
+  return Math.max(PROPOSITION_COMMISSION_MIN_FCFA, Math.round(p * PROPOSITION_COMMISSION_RATE));
+}
+// Numero de contact officiel de Teranga Trans, affiche au CLIENT une fois
+// un chauffeur assigne/confirme (a la place du numero prive du chauffeur,
+// que seul l'admin doit voir).
+const TERANGA_SERVICE_PHONE = "77 860 35 51";
+function calcSplit(prix){
+  const p = Number(prix)||0;
+  const commission = Math.round(p * COMMISSION_RATE);
+  return { commission, montantChauffeur: p - commission };
+}
+
+/* =========================================================
+   🎫 BILLET QR — embarquement
+   Chaque reservation confirmee recoit un token unique et
+   impredictible (qrToken). Le QR du billet client encode
+   {resId, token}. Le chauffeur scanne ce QR depuis sa fiche
+   de reservation pour verifier resId+token contre Firestore
+   et marquer l'embarquement. Un scan deja valide est bloque
+   (anti-fraude : pas de re-utilisation du meme billet).
+   ========================================================= */
+function genQrToken(){
+  // 24 caracteres aleatoires (base36) — suffisant pour un token
+  // a usage interne, non devinable, pas besoin de crypto lourde ici.
+  let t = '';
+  for(let i=0;i<3;i++) t += Math.random().toString(36).slice(2,10);
+  return t;
+}
+if(window.QrScanner){ QrScanner.WORKER_PATH = 'https://cdnjs.cloudflare.com/ajax/libs/qr-scanner/1.4.2/qr-scanner-worker.min.js'; }
+
+/* =========================================================
+   📱 AUTH PAR TELEPHONE (OTP SMS) — variables de session, pas
+   dans `state` car ce sont des objets Firebase non-serialisables
+   (RecaptchaVerifier, ConfirmationResult), pas des donnees a
+   afficher directement dans le rendu.
+   ========================================================= */
+let phoneConfirmationResult = null;
+let recaptchaVerifier = null;
+const SENEGAL_DIAL_CODE = "+221";
+function toE164Senegal(raw){
+  // Nettoie un numero saisi localement (77 000 00 00, 770000000...)
+  // et le transforme en format international requis par Firebase.
+  let digits = String(raw||'').replace(/\D/g,'');
+  if(digits.startsWith('221')) digits = digits.slice(3);
+  digits = digits.replace(/^0+/, '');
+  return SENEGAL_DIAL_CODE + digits;
+}
+
+/* ---------- Helpers anti-XSS ---------- */
+function esc(str){
+  if(str===undefined || str===null) return "";
+  return String(str).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+const EVENT_TYPES = ["Mariage","Baptême","Excursion","Deuil / Cérémonie","Transport d'entreprise","Autre"];
+const STATUS_LABELS = {
+  en_attente:"En attente",
+  attente_chauffeur:"En attente du chauffeur",
+  confirmee:"Confirmée",
+  refusee:"Refusée",
+  en_route:"En route",
+  terminee:"Terminée",
+  annulee:"Annulée"
+};
+
+/* ---------- Equipements de bord (clim, ventilo, mini télé...) ---------- */
+const EQUIPEMENTS = [
+  {key:'clim', label:'Climatisation', icon:'❄️'},
+  {key:'ventilo', label:'Ventilateur', icon:'🌀'},
+  {key:'miniTV', label:'Mini télé', icon:'📺'},
+  {key:'wifi', label:'Wifi', icon:'📶'},
+  {key:'usb', label:'Prise USB', icon:'🔌'}
+];
+
+function renderEquipChoices(idPrefix, selected){
+  selected = selected || [];
+  return `<div class="equip-choice">
+    ${EQUIPEMENTS.map(eq=>`
+      <label>
+        <input type="checkbox" id="${idPrefix}-${eq.key}" value="${eq.key}" ${selected.includes(eq.key)?'checked':''}>
+        <span>${eq.icon} ${esc(eq.label)}</span>
+      </label>`).join('')}
+  </div>`;
+}
+
+function readEquipChoices(idPrefix){
+  return EQUIPEMENTS
+    .filter(eq=>{ const el=document.getElementById(`${idPrefix}-${eq.key}`); return el && el.checked; })
+    .map(eq=>eq.key);
+}
+
+function equipIconsText(list){
+  if(!list || list.length===0) return '';
+  const icons = list.map(k=>{ const eq = EQUIPEMENTS.find(e=>e.key===k); return eq ? eq.icon : ''; }).filter(Boolean);
+  return icons.length ? ` ${icons.join(' ')}` : '';
+}
+
+function equipBadges(list){
+  if(!list || list.length===0) return '';
+  return `<span class="equip-badges">${list.map(k=>{
+    const eq = EQUIPEMENTS.find(e=>e.key===k);
+    return eq ? `<span class="equip-badge" title="${esc(eq.label)}">${eq.icon} ${esc(eq.label)}</span>` : '';
+  }).join('')}</span>`;
+}
+
+let state = {
+  authLoading:true, // vrai jusqu'a ce que onAuthStateChanged reponde une 1ere fois
+  user:null,        // firebase auth user
+  profile:null,     // {role, status, nom, telephone}
+  authTab:"login",
+  authRole:"client",
+  authMsg:null,
+  showReset:false,
+  authMethod:"email",   // "email" ou "phone" — methode d'auth choisie sur l'ecran de connexion/inscription
+  phoneCodeSent:false,  // vrai une fois le SMS envoye, affiche le champ "code recu"
+  reservations:[],
+  buses:[],
+  drivers:[],
+  users:[],
+  userSearch:'',
+  filterStatut:'tous',
+  clientSearch:'',
+  clientFilterStatut:'tous',
+  pendingDrivers:[],
+  activePanel:null,
+  toast:null,
+  assignOpenFor:null,
+  profileMsg:null,
+  knownStatuts:{}, // pour detecter les changements de statut et notifier
+  // ---- Marche des propositions chauffeur <-> client ----
+  openRequests:[],      // (chauffeur) demandes clients non encore assignees, ouvertes aux offres
+  propositions:[],      // (client) offres recues sur ses propres demandes
+  myPropositions:[],    // (chauffeur) ses propres offres envoyees, tous statuts
+  proposingFor:null,    // id de la reservation pour laquelle le chauffeur remplit son offre
+  editingTrajet:null,   // id du trajet publie que le chauffeur est en train de modifier
+  // ---- Trajets publies directement par un chauffeur (sans demande client
+  // prealable) : le chauffeur propose, le client recherche et reserve.
+  trajetsProposes:[],    // (client) trajets ouverts publies par des chauffeurs
+  mesTrajetsProposes:[], // (chauffeur) ses propres trajets publies, tous statuts
+  clientTrajetSearch:'',
+  // ---- Portefeuille / recharge PayTech ----
+  rechargements:[]       // (client) historique de ses demandes de recharge PayTech
+};
+
+const root = document.getElementById('root');
+
+function render(){
+  if(state.authLoading){
+    root.innerHTML = `<div class="loading-wrap"><div class="spin"></div></div>`;
+    return;
+  }
+  if(!state.user || !state.profile){
+    root.innerHTML = renderAuth();
+    bindAuthEvents();
+    return;
+  }
+  if(state.profile.role === "chauffeur" && state.profile.status === "pending"){
+    root.innerHTML = renderPendingDriver();
+    bindLogout();
+    return;
+  }
+  if(state.profile.status === "refuse"){
+    root.innerHTML = renderSuspended();
+    bindLogout();
+    return;
+  }
+  root.innerHTML = renderShell();
+  bindShellEvents();
+}
+
+/* ================= AUTH SCREEN ================= */
+function renderAuth(){
+  const isLogin = state.authTab === "login";
+  return `
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="hero-photo">
+        <img src="hero-bus.jpg?v=1" alt="Car rapide sénégalais au coucher du soleil">
+        <div class="hero-veil"></div>
+        <div class="hero-flag"><i></i><i></i><i></i></div>
+        <div class="hero-txt"><h2>Teranga Trans</h2><p>Dakar &bull; Thiès &bull; Touba &bull; Ziguinchor</p></div>
+      </div>
+            <div class="auth-card-body">
+      <div class="logo-line">${busLogo(24,'var(--gold)')}<h1 style="font-size:19px;">${isLogin?'Bienvenue':'Rejoignez-nous'}</h1></div>
+      <p class="tagline">Réservez un bus pour vos cérémonies, partout au Sénégal.</p>
+      ${state.showReset ? `
+      <div class="logo-line" style="margin-top:2px;"><h1 style="font-size:19px;">Mot de passe oublié</h1></div>
+      <p class="tagline">Indique ton email, on t'envoie un lien pour réinitialiser ton mot de passe.</p>
+      <form id="resetForm">
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="r-email" required>
+        </div>
+        <button class="btn-primary" type="submit" id="resetSubmit">Envoyer le lien</button>
+      </form>
+      <button type="button" id="backToLogin" style="margin-top:14px;background:transparent;border:none;color:var(--ink-soft);font-size:13px;text-decoration:underline;cursor:pointer;">&larr; Retour à la connexion</button>
+      ${state.authMsg ? `<div class="auth-msg ${state.authMsg.type}">${esc(state.authMsg.text)}</div>` : ``}
+      ` : `
+      <div class="tabs">
+        <button data-tab="login" class="${isLogin?'active':''}">Connexion</button>
+        <button data-tab="register" class="${!isLogin?'active':''}">Créer un compte</button>
+      </div>
+      <button type="button" id="authMethodToggle" style="margin:10px 0 4px;background:transparent;border:none;color:var(--gold);font-size:13px;font-weight:600;text-decoration:underline;cursor:pointer;">
+        ${state.authMethod==='email' ? '📱 Utiliser mon numéro de téléphone' : '✉️ Utiliser mon email à la place'}
+      </button>
+      <div id="recaptcha-container"></div>
+      <form id="authForm">
+        ${!isLogin ? `
+        <div class="field">
+          <label>Nom complet</label>
+          <input type="text" id="f-nom" required>
+        </div>
+        <div class="field">
+          <label>Téléphone</label>
+          <input type="tel" id="f-tel" placeholder="77 000 00 00" required>
+        </div>
+        <div class="field">
+          <label>Je m'inscris comme</label>
+          <div class="role-choice">
+            <label><input type="radio" name="role" value="client" ${state.authRole==='client'?'checked':''}><span>Client</span></label>
+            <label><input type="radio" name="role" value="chauffeur" ${state.authRole==='chauffeur'?'checked':''}><span>Chauffeur</span></label>
+          </div>
+        </div>
+        ${state.authRole==='chauffeur' ? `
+        <div class="field">
+          <label>Numéro de permis de conduire</label>
+          <input type="text" id="f-permis" placeholder="Ex: SN-DK-123456" required>
+        </div>
+        <p style="font-size:12px;color:var(--ink-soft);margin:-8px 0 14px;">Ton compte sera actif dès qu'un administrateur aura validé ton profil.</p>
+        ` : ``}
+        ` : ``}
+        ${state.authMethod==='email' ? `
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="f-email" required>
+        </div>
+        <div class="field">
+          <label>Mot de passe</label>
+          <input type="password" id="f-pass" required minlength="6">
+        </div>
+        <button class="btn-primary" type="submit" id="authSubmit">${isLogin? 'Se connecter' : 'Créer mon compte'}</button>
+        ` : `
+        ${!state.phoneCodeSent ? `
+        ${isLogin ? `
+        <div class="field">
+          <label>Téléphone</label>
+          <input type="tel" id="f-tel-login" placeholder="77 000 00 00" required>
+        </div>
+        ` : ``}
+        <button class="btn-primary" type="submit" id="authSubmit">Envoyer le code par SMS</button>
+        ` : `
+        <p style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 12px;">Code envoyé par SMS. Entre-le ci-dessous.</p>
+        <div class="field">
+          <label>Code reçu par SMS</label>
+          <input type="text" inputmode="numeric" id="f-otp-code" placeholder="123456" required>
+        </div>
+        <button class="btn-primary" type="submit" id="authSubmit">Vérifier le code</button>
+        <button type="button" id="phoneCancelBtn" style="margin-top:10px;background:transparent;border:none;color:var(--ink-soft);font-size:13px;text-decoration:underline;cursor:pointer;">Recommencer</button>
+        `}
+        `}
+      </form>
+      ${isLogin && state.authMethod==='email' ? `<button type="button" id="forgotPassBtn" style="margin-top:12px;background:transparent;border:none;color:var(--ink-soft);font-size:13px;text-decoration:underline;cursor:pointer;">Mot de passe oublié ?</button>` : ``}
+      ${state.authMsg ? `<div class="auth-msg ${state.authMsg.type}">${esc(state.authMsg.text)}</div>` : ``}
+      `}
+      </div>
+    </div>
+  </div>`;
+}
+
+function bindAuthEvents(){
+  document.querySelectorAll('[data-tab]').forEach(b=>{
+    b.onclick = ()=>{ state.authTab = b.dataset.tab; state.authMsg=null; state.phoneCodeSent=false; phoneConfirmationResult=null; render(); };
+  });
+  document.querySelectorAll('input[name="role"]').forEach(r=>{
+    r.onchange = ()=>{ state.authRole = r.value; render(); };
+  });
+
+  const methodToggle = document.getElementById('authMethodToggle');
+  if(methodToggle){
+    methodToggle.onclick = ()=>{
+      state.authMethod = state.authMethod==='email' ? 'phone' : 'email';
+      state.authMsg = null;
+      state.phoneCodeSent = false;
+      phoneConfirmationResult = null;
+      render();
     };
-  } catch (error) {
-    console.error("Erreur createPaytechPayment:", error);
-    throw new functions.https.HttpsError("internal", error.message);
   }
-});
+  const phoneCancelBtn = document.getElementById('phoneCancelBtn');
+  if(phoneCancelBtn){
+    phoneCancelBtn.onclick = ()=>{ state.phoneCodeSent = false; phoneConfirmationResult = null; state.authMsg = null; render(); };
+  }
 
-/**
- * 2. paytechIPN
- * Fonction HTTP (pas callable) : PayTech appelle cette URL après un paiement
- * pour confirmer le statut (succès ou échec).
- */
-exports.paytechIPN = functions.https.onRequest(async (req, res) => {
-  try {
-    const {
-      type_event,
-      ref_command,
-      item_price,
-      custom_field,
-      api_key_sha256,
-      api_secret_sha256,
-    } = req.body;
+  const forgotBtn = document.getElementById('forgotPassBtn');
+  if(forgotBtn){
+    forgotBtn.onclick = ()=>{ state.showReset = true; state.authMsg = null; render(); };
+  }
+  const backBtn = document.getElementById('backToLogin');
+  if(backBtn){
+    backBtn.onclick = ()=>{ state.showReset = false; state.authMsg = null; render(); };
+  }
+  const resetForm = document.getElementById('resetForm');
+  if(resetForm){
+    resetForm.onsubmit = async (e)=>{
+      e.preventDefault();
+      const email = document.getElementById('r-email').value.trim();
+      const submitBtn = document.getElementById('resetSubmit');
+      submitBtn.disabled = true;
+      state.authMsg = null;
+      try{
+        await auth.sendPasswordResetEmail(email);
+        state.authMsg = {type:'success', text:"Email envoyé ! Vérifie ta boîte de réception (et les spams)."};
+      }catch(err){
+        console.error('Erreur réinitialisation mot de passe Teranga Trans:', err);
+        state.authMsg = {type:'error', text: friendlyAuthError(err)};
+      }
+      submitBtn.disabled = false;
+      render();
+    };
+  }
 
-    // Vérification de sécurité : PayTech envoie le hash de tes clés
-    const crypto = require("crypto");
-    const expectedKeyHash = crypto.createHash("sha256").update(PAYTECH_API_KEY).digest("hex");
-    const expectedSecretHash = crypto.createHash("sha256").update(PAYTECH_API_SECRET).digest("hex");
+  const form = document.getElementById('authForm');
+  if(!form) return;
 
-    if (api_key_sha256 !== expectedKeyHash || api_secret_sha256 !== expectedSecretHash) {
-      console.error("IPN reçu avec des clés invalides !");
-      return res.status(403).send("Forbidden");
+  function showAuthError(err){
+    console.error('Erreur inscription/connexion Teranga Trans:', err);
+    state.authMsg = {type:'error', text: friendlyAuthError(err)};
+    let msgEl = document.querySelector('.auth-msg');
+    if(!msgEl){
+      msgEl = document.createElement('div');
+      form.insertAdjacentElement('afterend', msgEl);
+    }
+    msgEl.className = 'auth-msg ' + state.authMsg.type;
+    msgEl.textContent = state.authMsg.text;
+  }
+
+  /* ---- Creation du profil Firestore commune email/telephone ---- */
+  async function createProfileForNewUser(uid, {nom, tel, email}){
+    const permisEl = document.getElementById('f-permis');
+    const permis = permisEl ? permisEl.value.trim() : '';
+    const isAdmin = email && ADMIN_EMAILS.map(a=>a.toLowerCase()).includes(email.toLowerCase());
+    const finalRole = isAdmin ? 'admin' : state.authRole;
+    const finalStatus = finalRole === 'chauffeur' ? 'pending' : 'active';
+    const profile = {
+      nom, telephone: tel, email: email || null, role: finalRole,
+      status: finalStatus,
+      numeroPermis: finalRole==='chauffeur' ? permis : null,
+      solde: finalRole==='client' ? 0 : null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    try{
+      await db.collection('users').doc(uid).set(profile);
+    }catch(writeErr){
+      await auth.currentUser.delete().catch(()=>{});
+      throw writeErr;
+    }
+  }
+
+  form.onsubmit = async (e)=>{
+    e.preventDefault();
+    const submitBtn = document.getElementById('authSubmit');
+    submitBtn.disabled = true;
+    state.authMsg = null;
+
+    /* ================= AUTH PAR TELEPHONE (OTP) ================= */
+    if(state.authMethod === 'phone'){
+      try{
+        if(!state.phoneCodeSent){
+          // Etape 1 : on envoie le SMS. En register, le numero vient du
+          // champ "Téléphone" du formulaire d'inscription (f-tel) ; en
+          // login, du champ dedie (f-tel-login).
+          const rawPhone = state.authTab==='login'
+            ? document.getElementById('f-tel-login').value.trim()
+            : document.getElementById('f-tel').value.trim();
+          const phoneE164 = toE164Senegal(rawPhone);
+          if(!recaptchaVerifier){
+            recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {size:'invisible'}, auth);
+          }
+          phoneConfirmationResult = await auth.signInWithPhoneNumber(phoneE164, recaptchaVerifier);
+          state.phoneCodeSent = true;
+          state.authMsg = {type:'success', text:"Code envoyé par SMS."};
+          submitBtn.disabled = false;
+          render();
+          return;
+        } else {
+          // Etape 2 : verification du code recu.
+          const code = document.getElementById('f-otp-code').value.trim();
+          if(!phoneConfirmationResult){ throw new Error("Session expirée, recommence."); }
+          const result = await phoneConfirmationResult.confirm(code);
+          const user = result.user;
+          if(state.authTab === 'register'){
+            const nom = document.getElementById('f-nom').value.trim();
+            const tel = document.getElementById('f-tel').value.trim();
+            await createProfileForNewUser(user.uid, {nom, tel, email:null});
+          } else {
+            // Connexion : on verifie qu'un profil existe deja pour ce numero.
+            const snap = await db.collection('users').doc(user.uid).get();
+            if(!snap.exists){
+              await auth.signOut();
+              throw new Error("Aucun compte trouvé avec ce numéro. Crée un compte d'abord.");
+            }
+          }
+          state.phoneCodeSent = false;
+          phoneConfirmationResult = null;
+        }
+      }catch(err){
+        showAuthError(err);
+        submitBtn.disabled = false;
+      }
+      return;
     }
 
-    if (!ref_command) {
-      return res.status(400).send("ref_command manquant");
+    /* ================= AUTH PAR EMAIL / MOT DE PASSE ================= */
+    const email = document.getElementById('f-email').value.trim();
+    const pass = document.getElementById('f-pass').value;
+    try{
+      if(state.authTab === 'login'){
+        await auth.signInWithEmailAndPassword(email, pass);
+      } else {
+        const nom = document.getElementById('f-nom').value.trim();
+        const tel = document.getElementById('f-tel').value.trim();
+        const cred = await auth.createUserWithEmailAndPassword(email, pass);
+        await createProfileForNewUser(cred.user.uid, {nom, tel, email});
+      }
+    }catch(err){
+      showAuthError(err);
+      submitBtn.disabled = false;
     }
+  };
+}
 
-    const paymentRef = db.collection("payments").doc(ref_command);
-    const custom = custom_field ? JSON.parse(custom_field) : {};
+function friendlyAuthError(err){
+  const map = {
+    'auth/email-already-in-use':"Cet email est déjà utilisé.",
+    'auth/invalid-email':"Email invalide.",
+    'auth/missing-email':"Merci de renseigner ton email.",
+    'auth/weak-password':"Mot de passe trop court (6 caractères min).",
+    'auth/user-not-found':"Compte introuvable.",
+    'auth/wrong-password':"Mot de passe incorrect.",
+    'auth/invalid-credential':"Email ou mot de passe incorrect.",
+    'auth/invalid-phone-number':"Numéro de téléphone invalide. Vérifie le format (ex: 77 000 00 00).",
+    'auth/missing-phone-number':"Merci de renseigner ton numéro de téléphone.",
+    'auth/invalid-verification-code':"Code incorrect. Vérifie le SMS reçu.",
+    'auth/code-expired':"Le code a expiré. Redemande un nouveau code.",
+    'auth/too-many-requests':"Trop de tentatives. Réessaie dans quelques minutes.",
+    'auth/quota-exceeded':"Limite de SMS atteinte pour aujourd'hui. Réessaie plus tard.",
+    'auth/unauthorized-domain':"Ce domaine n'est pas autorisé dans Firebase Authentication (Paramètres > Domaines autorisés).",
+    'auth/network-request-failed':"Problème de connexion internet. Vérifie ta connexion et réessaie.",
+    'permission-denied':"Accès refusé par les règles Firestore. Vérifie ton email dans ADMIN_EMAILS si tu essaies de créer le compte admin."
+  };
+  if(map[err.code]) return map[err.code];
+  // Erreur non reconnue : on affiche le détail brut pour pouvoir diagnostiquer.
+  return "Erreur : " + (err.code || err.message || String(err));
+}
 
-    if (type_event === "sale_complete") {
-      // Paiement réussi
-      await paymentRef.update({
-        status: "completed",
-        completedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+function renderPendingDriver(){
+  return `
+  <div class="auth-wrap">
+    <div class="auth-card" style="text-align:center;">
+      ${busLogo(36,'var(--gold)')}
+      <h1 style="margin-top:14px;">Compte en attente</h1>
+      <p class="tagline">Ton compte chauffeur a été créé. Un administrateur doit valider ton profil avant que tu puisses voir tes trajets.</p>
+      <button class="btn-primary" id="logoutBtn2" style="margin-top:10px;">Se déconnecter</button>
+    </div>
+  </div>`;
+}
 
-      // Crédite le solde de l'utilisateur si c'est un rechargement de wallet
-      if (custom.uid) {
-        const userRef = db.collection("users").doc(custom.uid);
-        await userRef.set(
-          {
-            walletBalance: admin.firestore.FieldValue.increment(Number(item_price)),
-          },
-          { merge: true }
-        );
-      }
-    } else if (type_event === "sale_canceled") {
-      await paymentRef.update({
-        status: "canceled",
-        canceledAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+function bindLogout(){
+  const b = document.getElementById('logoutBtn2');
+  if(b) b.onclick = ()=> auth.signOut();
+}
+
+function renderSuspended(){
+  return `
+  <div class="auth-wrap">
+    <div class="auth-card" style="text-align:center;">
+      ${busLogo(36,'var(--red)')}
+      <h1 style="margin-top:14px;">Compte suspendu</h1>
+      <p class="tagline">Ton compte a été suspendu par un administrateur. Contacte Teranga Trans si tu penses qu'il s'agit d'une erreur.</p>
+      <button class="btn-primary" id="logoutBtn2" style="margin-top:10px;">Se déconnecter</button>
+    </div>
+  </div>`;
+}
+
+/* ================= APP SHELL ================= */
+function renderShell(){
+  const role = state.profile.role;
+  const roleLabel = role === 'client' ? 'Client' : role === 'admin' ? 'Admin' : 'Chauffeur';
+  let navItems = [];
+  if(role === 'client') navItems = [['nouvelle','Nouvelle réservation'],['trajetschauffeurs','Trajets proposés'],['portefeuille','Mon portefeuille'],['mesreservations','Mes réservations'],['profil','Mon profil']];
+  if(role === 'admin') navItems = [['apercu','Vue d\'ensemble'],['demandes','Demandes'],['toutes','Toutes les réservations'],['utilisateurs','Utilisateurs'],['flotte','Flotte'],['chauffeurs','Chauffeurs'],['profil','Mon profil']];
+  if(role === 'chauffeur') navItems = [['offres','Demandes clients'],['proposer','Proposer un trajet'],['mestrajets','Mes trajets'],['stats','Mes stats'],['profil','Mon profil']];
+
+  if(!state.activePanel) state.activePanel = navItems[0][0];
+
+  return `
+  <header class="topbar">
+    <div class="brand">${busLogo(26,'var(--gold-light)')}<h1>Teranga Trans</h1></div>
+    <div class="who">
+      <span class="role-pill">${roleLabel}</span>
+      <span>${esc(state.profile.nom || state.profile.email)}</span>
+      <button class="logout" id="logoutBtn">Déconnexion</button>
+    </div>
+  </header>
+  <div class="road-divider"><span class="s-green"></span><span class="s-gold"></span><span class="s-red"></span></div>
+  <main>
+    <div class="dash-nav">
+      ${navItems.map(([key,label])=>`<button data-panel="${key}" class="${state.activePanel===key?'active':''}">${label}</button>`).join('')}
+    </div>
+    <div id="panelHost"></div>
+  </main>
+  ${state.toast ? `<div class="toast">${esc(state.toast)}</div>` : ``}
+  `;
+}
+
+function bindShellEvents(){
+  document.getElementById('logoutBtn').onclick = ()=> auth.signOut();
+  if(state.profile.role !== 'admin' && window.Notification && Notification.permission === 'default'){
+    Notification.requestPermission().catch(()=>{});
+  }
+  document.querySelectorAll('[data-panel]').forEach(b=>{
+    b.onclick = ()=>{ state.activePanel = b.dataset.panel; renderPanel(); };
+  });
+  renderPanel();
+  if(state.toast){
+    setTimeout(()=>{ state.toast=null; const t=document.querySelector('.toast'); if(t) t.remove(); }, 3000);
+  }
+}
+
+function showToast(msg){
+  state.toast = msg;
+  const host = document.body;
+  let el = document.querySelector('.toast');
+  if(el) el.remove();
+  el = document.createElement('div');
+  el.className='toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(()=>{ el.remove(); state.toast=null; }, 3000);
+}
+
+function renderPanel(){
+  const host = document.getElementById('panelHost');
+  const role = state.profile.role;
+  const panel = state.activePanel;
+  if(role==='client' && panel==='nouvelle') host.innerHTML = renderNouvelleReservation();
+  else if(role==='client' && panel==='trajetschauffeurs') host.innerHTML = renderClientTrajetsProposes();
+  else if(role==='client' && panel==='portefeuille') host.innerHTML = renderClientPortefeuille();
+  else if(role==='client' && panel==='mesreservations') host.innerHTML = renderMesReservations();
+  else if(role==='admin' && panel==='apercu') host.innerHTML = renderAdminApercu();
+  else if(role==='admin' && panel==='demandes') host.innerHTML = renderAdminDemandes();
+  else if(role==='admin' && panel==='toutes') host.innerHTML = renderAdminToutes();
+  else if(role==='admin' && panel==='utilisateurs') host.innerHTML = renderUtilisateurs();
+  else if(role==='admin' && panel==='flotte') host.innerHTML = renderFlotte();
+  else if(role==='admin' && panel==='chauffeurs') host.innerHTML = renderChauffeurs();
+  else if(role==='chauffeur' && panel==='offres') host.innerHTML = renderChauffeurOffres();
+  else if(role==='chauffeur' && panel==='proposer') host.innerHTML = renderChauffeurProposer();
+  else if(role==='chauffeur' && panel==='mestrajets') host.innerHTML = renderMesTrajets();
+  else if(role==='chauffeur' && panel==='stats') host.innerHTML = renderChauffeurStats();
+  else if(panel==='profil') host.innerHTML = renderProfil();
+  bindPanelEvents();
+}
+
+/* ---------- Profil (tous rôles) ---------- */
+function renderProfil(){
+  const p = state.profile;
+  return `
+  <div class="section-title"><h2>Mon profil</h2></div>
+  <div class="card">
+    <form id="profilForm">
+      <div class="grid-2">
+        <div class="field">
+          <label>Nom complet</label>
+          <input type="text" id="p-nom" value="${esc(p.nom||'')}" required>
+        </div>
+        <div class="field">
+          <label>Téléphone</label>
+          <input type="tel" id="p-tel" value="${esc(p.telephone||'')}" required>
+        </div>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" value="${esc(p.email||'')}" disabled style="background:var(--cream);color:var(--ink-soft);">
+      </div>
+      ${p.role==='chauffeur' ? `
+      <div class="field">
+        <label>Numéro de permis</label>
+        <input type="text" value="${esc(p.numeroPermis||'—')}" disabled style="background:var(--cream);color:var(--ink-soft);">
+      </div>` : ``}
+      <button class="btn-primary" type="submit">Enregistrer</button>
+    </form>
+    ${state.profileMsg ? `<div class="auth-msg ${state.profileMsg.type}">${esc(state.profileMsg.text)}</div>` : ``}
+  </div>
+  <div class="card">
+    <div class="section-title" style="margin-bottom:8px;"><h2 style="font-size:16px;">Mot de passe</h2></div>
+    <p style="font-size:13px;color:var(--ink-soft);margin:0 0 12px;">On t'envoie un lien par email pour choisir un nouveau mot de passe.</p>
+    <button class="btn-primary" id="changePassBtn" style="width:auto;padding:11px 18px;">Envoyer le lien de réinitialisation</button>
+  </div>
+  `;
+}
+
+/* ---------- Client: nouvelle réservation ---------- */
+function renderNouvelleReservation(){
+  return `
+  <div class="section-title"><h2>Nouvelle réservation</h2></div>
+  <div class="card">
+    <form id="resForm">
+      <div class="grid-2">
+        <div class="field">
+          <label>Type d'événement</label>
+          <select id="r-type" required>
+            <option value="">Choisir...</option>
+            ${EVENT_TYPES.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Date de l'événement</label>
+          <input type="date" id="r-date" required>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Lieu de départ</label>
+          <input type="text" id="r-depart" placeholder="Ex: Rufisque, Marché central" required>
+        </div>
+        <div class="field">
+          <label>Lieu d'arrivée</label>
+          <input type="text" id="r-arrivee" placeholder="Ex: Thiès, Salle des fêtes" required>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Nombre de passagers</label>
+          <input type="number" id="r-passagers" min="1" max="120" required>
+        </div>
+        <div class="field">
+          <label>Téléphone de contact</label>
+          <input type="tel" id="r-tel" value="${esc(state.profile.telephone||'')}" required>
+        </div>
+      </div>
+      <div class="field">
+        <label>Équipements souhaités (optionnel)</label>
+        ${renderEquipChoices('r-equip')}
+      </div>
+      <div class="field">
+        <label>Remarques (optionnel)</label>
+        <input type="text" id="r-notes" placeholder="Heure souhaitée, détails particuliers...">
+      </div>
+      <button class="btn-primary" type="submit">Envoyer la demande</button>
+    </form>
+  </div>`;
+}
+
+async function submitReservation(e){
+  e.preventDefault();
+  const data = {
+    clientId: state.user.uid,
+    clientNom: state.profile.nom || state.profile.email,
+    clientTelephone: document.getElementById('r-tel').value.trim(),
+    typeEvenement: document.getElementById('r-type').value,
+    dateEvenement: document.getElementById('r-date').value,
+    lieuDepart: document.getElementById('r-depart').value.trim(),
+    lieuArrivee: document.getElementById('r-arrivee').value.trim(),
+    nbPassagers: Number(document.getElementById('r-passagers').value),
+    equipementsSouhaites: readEquipChoices('r-equip'),
+    notes: document.getElementById('r-notes').value.trim(),
+    statut: 'en_attente',
+    busId: null, busImmat: null, busEquipements: null, chauffeurId: null, chauffeurNom: null, prix: null,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await db.collection('reservations').add(data);
+  showToast("Demande envoyée ! Tu seras notifié une fois confirmée.");
+  state.activePanel = 'mesreservations';
+  renderPanel();
+}
+
+/* ---------- Client: mes réservations ---------- */
+function renderMesReservations(){
+  const all = state.reservations.filter(r=>r.clientId === state.user.uid)
+    .sort((a,b)=> (b._ts||0)-(a._ts||0));
+  if(all.length===0) return emptyState("Aucune réservation pour l'instant.", "Fais ta première demande depuis l'onglet « Nouvelle réservation ».");
+
+  const f = state.clientFilterStatut || 'tous';
+  const q = (state.clientSearch||'').toLowerCase();
+  const chips = [['tous','Toutes']].concat(Object.keys(STATUS_LABELS).map(k=>[k,STATUS_LABELS[k]]));
+  const list = all
+    .filter(r=> f==='tous' || r.statut===f)
+    .filter(r=> !q || `${r.lieuDepart||''} ${r.lieuArrivee||''} ${r.typeEvenement||''}`.toLowerCase().includes(q));
+
+  return `
+  <div class="field" style="max-width:340px;margin-bottom:12px;">
+    <label>Rechercher</label>
+    <input type="text" id="clientResSearch" placeholder="Lieu, type d'événement..." value="${esc(state.clientSearch||'')}">
+  </div>
+  <div class="dash-nav" style="margin-bottom:14px;">
+    ${chips.map(([k,l])=>`<button data-client-filter="${k}" class="${f===k?'active':''}">${l}</button>`).join('')}
+  </div>
+  ${list.length===0 ? emptyState("Aucune réservation dans ce filtre.","") : list.map(r=>ticketCard(r,'client') + (r.statut==='en_attente' ? renderPropositionsForClient(r) : '')).join('')}
+  `;
+}
+
+/* ---------- Client: offres recues des chauffeurs sur une demande ---------- */
+function renderPropositionsForClient(r){
+  const offers = state.propositions
+    .filter(p=>p.reservationId===r.id && p.statut==='en_attente')
+    .sort((a,b)=>(a.prixTotal||0)-(b.prixTotal||0));
+  if(offers.length===0) return '';
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  return `
+  <div class="card" style="margin-top:-10px;margin-bottom:20px;">
+    <div style="font-size:12.5px;font-weight:700;color:var(--night);text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;">🚌 ${offers.length} chauffeur${offers.length>1?'s ont':' a'} proposé un prix pour ce trajet</div>
+    ${offers.map(p=>{
+      const prix = Number(p.prixTotal||0);
+      const canPayWallet = solde >= prix;
+      return `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;font-size:14px;color:var(--night);">${esc(p.chauffeurNom||'Chauffeur')}</div>
+          <div style="font-size:12px;color:var(--ink-soft);">${p.busImmat?`Bus ${esc(p.busImmat)} • `:''}<b>${prix.toLocaleString('fr-FR')} FCFA</b>${p.message?` — "${esc(p.message)}"`:''}</div>
+        </div>
+        <div class="btn-row" style="margin:0;">
+          ${canPayWallet ? `<button class="btn-sm btn-confirm" data-pay-proposition-wallet="${p.id}">💳 Payer avec mon solde</button>` : ``}
+          <button class="btn-sm ${canPayWallet?'btn-ghost':'btn-confirm'}" data-choose-proposition="${p.id}">Réserver (payer plus tard)</button>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+/* ---------- Admin: vue d'ensemble ---------- */
+function renderAdminApercu(){
+  const total = state.reservations.length;
+  const enAttente = state.reservations.filter(r=>r.statut==='en_attente').length;
+  const confirmees = state.reservations.filter(r=>r.statut==='confirmee').length;
+  const enRoute = state.reservations.filter(r=>r.statut==='en_route').length;
+  const terminees = state.reservations.filter(r=>r.statut==='terminee').length;
+  const refusees = state.reservations.filter(r=>r.statut==='refusee').length;
+  const resFacturees = state.reservations
+    .filter(r=>r.prix && (r.statut==='confirmee' || r.statut==='en_route' || r.statut==='terminee'));
+  const revenu = resFacturees.reduce((sum,r)=>sum + Number(r.prix||0), 0);
+  const commissionTotale = resFacturees.reduce((sum,r)=>sum + Number(r.commission||0), 0);
+  const chauffeursActifs = state.drivers.filter(d=>d.status==='active').length;
+  const chauffeursEnAttente = state.drivers.filter(d=>d.status==='pending').length;
+  const busDispo = state.buses.filter(b=>b.statut==='disponible').length;
+
+  const stat = (label, value, sub, color) => `
+    <div class="stat-card">
+      <div class="stat-value" style="color:${color||'var(--night)'};">${value}</div>
+      <div class="stat-label">${esc(label)}</div>
+      ${sub ? `<div class="stat-sub">${sub}</div>` : ``}
+    </div>`;
+
+  const recents = [...state.reservations].sort((a,b)=>(b._ts||0)-(a._ts||0)).slice(0,3);
+
+  return `
+  <div class="section-title"><h2>Vue d'ensemble</h2></div>
+  <div class="stat-grid">
+    ${stat("Demandes en attente", enAttente, enAttente>0 ? "à traiter" : "tout est à jour", "var(--gold)")}
+    ${stat("Réservations confirmées", confirmees + enRoute, `${enRoute} en route`)}
+    ${stat("Trajets terminés", terminees)}
+    ${stat("Chiffre d'affaires", revenu.toLocaleString('fr-FR') + " FCFA", "réservations confirmées+")}
+    ${stat("Ta commission", commissionTotale.toLocaleString('fr-FR') + " FCFA", `${(COMMISSION_RATE*100).toFixed(0)}% du CA`, "var(--gold)")}
+    ${stat("Chauffeurs actifs", chauffeursActifs, chauffeursEnAttente>0 ? `${chauffeursEnAttente} en attente de validation` : "aucun en attente")}
+    ${stat("Bus disponibles", busDispo, `${state.buses.length} au total`)}
+  </div>
+
+  <div class="section-title" style="margin-top:28px;"><h2>Activité récente</h2></div>
+  ${recents.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;">Aucune réservation pour l'instant.</p>` :
+    recents.map(r=>ticketCard(r,'admin-readonly')).join('')}
+  ${refusees>0 ? `<p style="color:var(--ink-soft);font-size:12.5px;margin-top:6px;">${refusees} demande${refusees>1?'s':''} refusée${refusees>1?'s':''} au total.</p>` : ``}
+  `;
+}
+
+/* ---------- Admin: demandes en attente ---------- */
+function renderAdminDemandes(){
+  const list = state.reservations.filter(r=>r.statut==='en_attente').sort((a,b)=>(a._ts||0)-(b._ts||0));
+  return `
+  <div class="section-title"><h2>Demandes en attente</h2><span class="count-badge">${list.length}</span></div>
+  ${list.length===0 ? emptyState("Aucune demande en attente.","Les nouvelles demandes clients apparaîtront ici.") :
+    list.map(r=>ticketCard(r,'admin')).join('')}
+  `;
+}
+
+function renderAdminToutes(){
+  const list = [...state.reservations].sort((a,b)=>(b._ts||0)-(a._ts||0));
+  const f = state.filterStatut || 'tous';
+  const shown = f==='tous' ? list : list.filter(r=>r.statut===f);
+  const chips = [['tous','Toutes']].concat(Object.keys(STATUS_LABELS).map(k=>[k,STATUS_LABELS[k]]));
+  return `
+  <div class="section-title"><h2>Toutes les réservations</h2><span class="count-badge">${shown.length}</span></div>
+  <div class="dash-nav" style="margin-bottom:14px;">
+    ${chips.map(([k,l])=>`<button data-filter="${k}" class="${f===k?'active':''}">${l}</button>`).join('')}
+  </div>
+  ${shown.length===0 ? emptyState("Aucune réservation dans ce filtre.","") : shown.map(r=>ticketCard(r,'admin-manage')).join('')}
+  `;
+}
+
+/* ---------- Admin: tous les utilisateurs ---------- */
+function renderUtilisateurs(){
+  const users = [...(state.users||[])].sort((a,b)=>String(a.nom||'').localeCompare(String(b.nom||'')));
+  const q = (state.userSearch||'').toLowerCase();
+  const list = q ? users.filter(u=>`${u.nom||''} ${u.email||''} ${u.telephone||''}`.toLowerCase().includes(q)) : users;
+  const nb = role => users.filter(u=>u.role===role).length;
+  return `
+  <div class="section-title"><h2>Utilisateurs</h2><span class="count-badge">${users.length}</span></div>
+  <div class="stat-grid" style="margin-bottom:18px;">
+    <div class="stat-card"><div class="stat-value">${nb('client')}</div><div class="stat-label">Clients</div></div>
+    <div class="stat-card"><div class="stat-value">${nb('chauffeur')}</div><div class="stat-label">Chauffeurs</div></div>
+    <div class="stat-card"><div class="stat-value">${nb('admin')}</div><div class="stat-label">Administrateurs</div></div>
+  </div>
+  <div class="card">
+    <div class="field" style="margin-bottom:12px;">
+      <label>Rechercher</label>
+      <input type="text" id="userSearch" placeholder="Nom, email ou téléphone..." value="${esc(state.userSearch||'')}">
+    </div>
+    ${list.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;">Aucun utilisateur trouvé.</p>` : `
+    <table class="user-table">
+      <thead><tr><th>Nom</th><th>Contact</th><th>Rôle</th><th>Statut</th><th>Réservations</th><th></th></tr></thead>
+      <tbody>
+      ${list.map(u=>{
+        const resCount = state.reservations.filter(r=>r.clientId===u.id || r.chauffeurId===u.id).length;
+        return `<tr>
+          <td><b>${esc(u.nom||'—')}</b></td>
+          <td style="font-size:12.5px;color:var(--ink-soft);">${esc(u.email||'—')}<br>${esc(u.telephone||'—')}</td>
+          <td><span class="tag tag-${esc(u.role||'client')}">${esc(u.role||'client')}</span></td>
+          <td><span class="status-dot ${u.status==='active'?'st-confirmee':u.status==='pending'?'st-en_attente':'st-refusee'}"></span>${u.status==='active'?'Actif':u.status==='pending'?'En attente':'Suspendu'}</td>
+          <td>${resCount}</td>
+          <td>${u.role==='admin' ? '' : (u.status==='active'
+              ? `<button class="btn-sm btn-red" data-suspend-user="${u.id}">Suspendre</button>`
+              : `<button class="btn-sm btn-confirm" data-activate-user="${u.id}">Activer</button>`)}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>`}
+  </div>
+  `;
+}
+
+/* ---------- Admin: flotte ---------- */
+function renderFlotte(){
+  const buses = state.buses;
+  return `
+  <div class="section-title"><h2>Flotte de bus</h2><span class="count-badge">${buses.length}</span></div>
+  <div class="card">
+    <form id="busForm" class="inline-form">
+      <div class="field"><label>Immatriculation</label><input type="text" id="b-immat" placeholder="DK-1234-AB" required></div>
+      <div class="field"><label>Marque / Modèle</label><input type="text" id="b-modele" placeholder="Toyota Coaster" required></div>
+      <div class="field"><label>Capacité</label><input type="number" id="b-capacite" min="4" max="120" required></div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>Équipements à bord</label>
+        ${renderEquipChoices('b-equip')}
+      </div>
+      <button class="btn-primary" type="submit" style="width:auto;padding:11px 18px;">Ajouter</button>
+    </form>
+  </div>
+  <div class="card">
+    ${buses.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;">Aucun bus enregistré pour l'instant.</p>` : `
+    <table class="fleet">
+      <thead><tr><th>Immatriculation</th><th>Modèle</th><th>Capacité</th><th>Équipements</th><th>Statut</th><th></th></tr></thead>
+      <tbody>
+        ${buses.map(b=>`
+        <tr>
+          <td class="mono">${esc(b.immatriculation)}</td>
+          <td>${esc(b.modele)}</td>
+          <td>${esc(b.capacite)} places</td>
+          <td>${equipBadges(b.equipements) || `<span style="color:var(--ink-soft);font-size:12.5px;">—</span>`} <button class="btn-sm btn-ghost" data-edit-equip="${b.id}" style="margin-left:6px;">Modifier</button></td>
+          <td><span class="status-dot ${b.statut==='disponible'?'st-confirmee':'st-en_route'}"></span>${b.statut==='disponible'?'Disponible':'En service'}</td>
+          <td><button class="btn-sm btn-ghost" data-del-bus="${b.id}">Retirer</button></td>
+        </tr>
+        <tr data-equip-row="${b.id}" style="display:none;">
+          <td colspan="6">
+            <div class="assign-box">
+              ${renderEquipChoices('be-'+b.id, b.equipements)}
+              <div class="btn-row">
+                <button class="btn-sm btn-confirm" data-save-equip="${b.id}">Enregistrer</button>
+                <button class="btn-sm btn-ghost" data-cancel-equip="${b.id}">Annuler</button>
+              </div>
+            </div>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`}
+  </div>
+  `;
+}
+
+/* ---------- Admin: chauffeurs ---------- */
+function renderChauffeurs(){
+  const pending = state.drivers.filter(d=>d.status==='pending');
+  const approved = state.drivers.filter(d=>d.status==='active');
+  return `
+  <div class="section-title"><h2>Chauffeurs en attente de validation</h2><span class="count-badge">${pending.length}</span></div>
+  ${pending.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;margin-bottom:24px;">Aucune demande en attente.</p>` :
+    pending.map(d=>`
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:600;">${esc(d.nom)}</div>
+        <div style="font-size:12.5px;color:var(--ink-soft);">${esc(d.email)} • ${esc(d.telephone||'—')}</div>
+        <div style="font-size:12.5px;color:var(--ink-soft);">Permis: <b class="mono">${esc(d.numeroPermis||'—')}</b></div>
+      </div>
+      <div class="btn-row" style="margin-top:0;">
+        <button class="btn-sm btn-confirm" data-approve-driver="${d.id}">Valider</button>
+        <button class="btn-sm btn-red" data-reject-driver="${d.id}">Refuser</button>
+      </div>
+    </div>`).join('')}
+
+  <div class="section-title" style="margin-top:28px;"><h2>Chauffeurs validés</h2><span class="count-badge">${approved.length}</span></div>
+  ${approved.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;">Aucun chauffeur validé pour l'instant.</p>` :
+    approved.map(d=>`
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:600;">${esc(d.nom)}</div>
+        <div style="font-size:12.5px;color:var(--ink-soft);">${esc(d.email)} • ${esc(d.telephone||'—')} • Permis: <b class="mono">${esc(d.numeroPermis||'—')}</b></div>
+      </div>
+    </div>`).join('')}
+  `;
+}
+
+/* ---------- Chauffeur: mes trajets ---------- */
+function renderMesTrajets(){
+  const list = state.reservations.filter(r=>r.chauffeurId === state.user.uid && r.statut!=='refusee')
+    .sort((a,b)=>(a._ts||0)-(b._ts||0));
+  if(list.length===0) return emptyState("Aucun trajet assigné.", "Les trajets que l'admin t'assigne apparaîtront ici.");
+  return list.map(r=>ticketCard(r,'chauffeur')).join('');
+}
+
+/* ---------- Chauffeur: demandes clients ouvertes (marché) ---------- */
+function renderChauffeurOffres(){
+  // Demandes clients pas encore assignees par l'admin ni prises par un
+  // autre chauffeur : c'est la que le chauffeur peut proposer son prix.
+  const list = [...state.openRequests].sort((a,b)=>(a._ts||0)-(b._ts||0));
+  if(list.length===0) return emptyState("Aucune demande disponible pour l'instant.", "Les nouvelles demandes clients non assignées apparaîtront ici.");
+  return list.map(r=>chauffeurOffreCard(r)).join('');
+}
+
+/* ---------- Chauffeur: publier un trajet a l'avance (sans demande client) ---------- */
+function renderChauffeurProposer(){
+  const mine = [...state.mesTrajetsProposes].sort((a,b)=>(b._ts||0)-(a._ts||0));
+  return `
+  <div class="section-title"><h2>Proposer un trajet</h2></div>
+  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:-10px;margin-bottom:16px;">Publie un trajet que tu es prêt à faire, avant même qu'un client ne le demande. Les clients pourront le voir dans « Trajets proposés » et le réserver directement.</p>
+  <div class="card" style="margin-bottom:24px;">
+    <form id="trajetProposeForm">
+      <div class="grid-2">
+        <div class="field"><label>Départ</label><input type="text" id="tp-depart" placeholder="Ex: Dakar, Plateau" required></div>
+        <div class="field"><label>Arrivée</label><input type="text" id="tp-arrivee" placeholder="Ex: Saint-Louis, Centre" required></div>
+      </div>
+      <div class="grid-2" style="margin-top:8px;">
+        <div class="field"><label>Date</label><input type="date" id="tp-date" required></div>
+        <div class="field"><label>Places disponibles</label><input type="number" min="1" max="120" id="tp-places" required></div>
+      </div>
+      <div class="grid-2" style="margin-top:8px;">
+        <div class="field"><label>Ton prix (FCFA)</label><input type="number" min="0" id="tp-prix" placeholder="Ex: 70000" required></div>
+        <div class="field">
+          <label>Bus (optionnel)</label>
+          <select id="tp-bus">
+            <option value="">— À préciser plus tard —</option>
+            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Message (optionnel)</label>
+        <input type="text" id="tp-msg" placeholder="Ex: départ 7h précises, climatisé...">
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
+      <button class="btn-primary" type="submit" style="width:auto;padding:11px 20px;">Publier ce trajet</button>
+    </form>
+  </div>
+  ${mine.length===0 ? '' : `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">Mes trajets publiés</h3></div>
+  ${mine.map(t=>trajetProposeCard(t)).join('')}`}
+  `;
+}
+
+function trajetProposeCard(t){
+  const dateFmt = t.dateEvenement ? new Date(t.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const statutLabel = {ouvert:'Ouvert aux réservations', reserve:'Réservé', annule:'Retiré'}[t.statut] || t.statut;
+
+  if(state.editingTrajet === t.id){
+    return `
+    <div class="ticket">
+      <div class="stub-main">
+        <form id="trajetEditForm-${t.id}">
+          <div class="grid-2">
+            <div class="field"><label>Départ</label><input type="text" id="tpe-depart-${t.id}" value="${esc(t.lieuDepart)}" required></div>
+            <div class="field"><label>Arrivée</label><input type="text" id="tpe-arrivee-${t.id}" value="${esc(t.lieuArrivee)}" required></div>
+          </div>
+          <div class="grid-2" style="margin-top:8px;">
+            <div class="field"><label>Date</label><input type="date" id="tpe-date-${t.id}" value="${esc(t.dateEvenement)}" required></div>
+            <div class="field"><label>Places disponibles</label><input type="number" min="1" max="120" id="tpe-places-${t.id}" value="${esc(t.placesDisponibles)}" required></div>
+          </div>
+          <div class="grid-2" style="margin-top:8px;">
+            <div class="field"><label>Ton prix (FCFA)</label><input type="number" min="0" id="tpe-prix-${t.id}" value="${esc(t.prixPropose)}" required></div>
+            <div class="field">
+              <label>Bus (optionnel)</label>
+              <select id="tpe-bus-${t.id}">
+                <option value="">— À préciser plus tard —</option>
+                ${state.buses.map(b=>`<option value="${b.id}" ${t.busId===b.id?'selected':''}>${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="field" style="margin-top:8px;">
+            <label>Message (optionnel)</label>
+            <input type="text" id="tpe-msg-${t.id}" value="${esc(t.message||'')}">
+          </div>
+          <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
+          <div class="btn-row">
+            <button class="btn-sm btn-confirm" type="submit">Enregistrer les modifications</button>
+            <button class="btn-sm btn-ghost" type="button" data-cancel-edit-trajet="${t.id}">Annuler</button>
+          </div>
+        </form>
+      </div>
+      <div class="perforation"></div>
+      <div class="stub-side">
+        <div class="status-label">Statut</div>
+        <div class="status-value">${esc(statutLabel)}</div>
+        <div class="seat-code mono">#${t.id ? t.id.slice(0,6).toUpperCase() : '------'}</div>
+      </div>
+    </div>`;
+  }
+
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(t.lieuDepart)} → ${esc(t.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${dateFmt} • ${esc(t.placesDisponibles)} places • <b>${Number(t.prixTotal||0).toLocaleString('fr-FR')} FCFA</b></div>
+      ${t.busImmat ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">Bus ${esc(t.busImmat)}</div>` : ``}
+      ${t.message ? `<div style="margin-top:6px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(t.message)}"</div>` : ``}
+      ${t.statut==='ouvert' ? `<div class="btn-row" style="margin-top:10px;"><button class="btn-sm btn-night" data-edit-trajet="${t.id}">Modifier</button><button class="btn-sm btn-ghost" data-cancel-trajet-propose="${t.id}">Retirer ce trajet</button></div>` : ``}
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value">${esc(statutLabel)}</div>
+      <div class="seat-code mono">#${t.id ? t.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Client: rechercher et reserver un trajet publie par un chauffeur ---------- */
+function renderClientTrajetsProposes(){
+  const q = (state.clientTrajetSearch||'').toLowerCase();
+  const list = state.trajetsProposes
+    .filter(t=> !q || `${t.lieuDepart||''} ${t.lieuArrivee||''}`.toLowerCase().includes(q))
+    .sort((a,b)=>(a._ts||0)-(b._ts||0));
+  return `
+  <div class="section-title"><h2>Trajets proposés par les chauffeurs</h2></div>
+  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:-10px;margin-bottom:16px;">Certains chauffeurs publient un trajet avant même qu'on le leur demande. Recherche et réserve directement si l'un d'eux te convient.</p>
+  <div class="field" style="max-width:340px;margin-bottom:14px;">
+    <label>Rechercher</label>
+    <input type="text" id="clientTrajetSearch" placeholder="Ville de départ ou d'arrivée..." value="${esc(state.clientTrajetSearch||'')}">
+  </div>
+  ${list.length===0 ? emptyState("Aucun trajet proposé pour l'instant.", "Reviens plus tard, ou fais ta propre demande depuis « Nouvelle réservation ».") : list.map(t=>clientTrajetProposeCard(t)).join('')}
+  `;
+}
+
+function clientTrajetProposeCard(t){
+  const dateFmt = t.dateEvenement ? new Date(t.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  const prix = Number(t.prixTotal||0);
+  const canPayWallet = solde >= prix;
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(t.lieuDepart)} → ${esc(t.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${dateFmt} • ${esc(t.placesDisponibles)} places dispo</div>
+      <div class="meta-row">
+        <span>Chauffeur: <b>${esc(t.chauffeurNom)}</b></span>
+        ${t.busImmat ? `<span>Bus: <b class="mono">${esc(t.busImmat)}</b></span>` : ``}
+        <span>Prix: <b>${prix.toLocaleString('fr-FR')} FCFA</b></span>
+      </div>
+      ${t.busEquipements && t.busEquipements.length ? `<div style="margin-top:8px;">${equipBadges(t.busEquipements)}</div>` : ``}
+      ${t.message ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(t.message)}"</div>` : ``}
+      <div class="btn-row" style="margin-top:10px;">
+        ${canPayWallet ? `<button class="btn-sm btn-confirm" data-pay-trajet-wallet="${t.id}">💳 Payer avec mon solde</button>` : ``}
+        <button class="btn-sm ${canPayWallet?'btn-ghost':'btn-confirm'}" data-book-trajet-propose="${t.id}">Réserver (payer plus tard)</button>
+      </div>
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value"><span class="status-dot st-en_attente"></span>Ouvert</div>
+      <div class="seat-code mono">#${t.id ? t.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Client: portefeuille (solde + recharge PayTech) ---------- */
+function renderClientPortefeuille(){
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  const rechs = [...state.rechargements];
+  const statutBadge = {
+    en_attente: '<span class="status-dot st-en_attente"></span>En attente',
+    validee: '<span class="status-dot st-confirmee"></span>Validée',
+    echouee: '<span class="status-dot st-annulee"></span>Échouée',
+  };
+  return `
+  <div class="section-title"><h2>Mon portefeuille</h2></div>
+  <div class="card" style="margin-bottom:20px;text-align:center;padding:28px 16px;">
+    <div style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;">Solde disponible</div>
+    <div style="font-size:34px;font-weight:800;color:var(--forest);margin-top:6px;">${solde.toLocaleString('fr-FR')} FCFA</div>
+  </div>
+  <div class="card" style="margin-bottom:24px;">
+    <h3 style="margin:0 0 12px;font-size:15px;">Recharger mon compte</h3>
+    <form id="rechargeForm">
+      <div class="field">
+        <label>Montant à recharger (FCFA)</label>
+        <input type="number" min="500" step="100" id="rc-montant" placeholder="Ex: 10000" required>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin:8px 0 12px;">Tu seras redirigé vers PayTech pour payer par Wave, Orange Money, carte bancaire, etc. Ton solde sera crédité automatiquement dès le paiement confirmé.</div>
+      <button class="btn-primary" type="submit" id="rechargeSubmitBtn" style="width:auto;padding:11px 20px;">Recharger via PayTech</button>
+    </form>
+  </div>
+  ${rechs.length===0 ? '' : `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">Historique des recharges</h3></div>
+  ${rechs.map(r=>`
+    <div class="ticket">
+      <div class="stub-main">
+        <div style="font-size:15px;font-weight:700;">${Number(r.montant||0).toLocaleString('fr-FR')} FCFA</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">${r._ts ? new Date(r._ts).toLocaleString('fr-FR') : ''}</div>
+      </div>
+      <div class="perforation"></div>
+      <div class="stub-side">
+        <div class="status-label">Statut</div>
+        <div class="status-value">${statutBadge[r.statut] || esc(r.statut)}</div>
+      </div>
+    </div>
+  `).join('')}`}
+  `;
+}
+
+function chauffeurOffreCard(r){
+  const dateFmt = r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const mine = state.myPropositions.find(p=>p.reservationId===r.id && p.statut==='en_attente');
+  let box;
+  if(mine){
+    box = `
+    <div class="assign-box">
+      <div style="font-size:13px;color:var(--night);">Ton offre : <b>${Number(mine.prixTotal||0).toLocaleString('fr-FR')} FCFA</b> — en attente de la réponse du client</div>
+      <div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-cancel-proposition="${mine.id}">Retirer mon offre</button></div>
+    </div>`;
+  } else if(state.proposingFor === r.id){
+    box = `
+    <div class="assign-box">
+      <div class="grid-2">
+        <div class="field">
+          <label>Ton prix (FCFA)</label>
+          <input type="number" min="0" id="propPrix-${r.id}" placeholder="Ex: 70000">
+        </div>
+        <div class="field">
+          <label>Bus (optionnel)</label>
+          <select id="propBus-${r.id}">
+            <option value="">— À préciser plus tard —</option>
+            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Message (optionnel)</label>
+        <input type="text" id="propMsg-${r.id}" placeholder="Ex: dispo dès 8h, bus climatisé...">
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
+      <div class="btn-row">
+        <button class="btn-sm btn-confirm" data-submit-proposition="${r.id}">Envoyer mon offre</button>
+        <button class="btn-sm btn-ghost" data-cancel-propose-form="${r.id}">Annuler</button>
+      </div>
+    </div>`;
+  } else {
+    box = `<div class="btn-row"><button class="btn-sm btn-night" data-open-propose="${r.id}">💬 Proposer un prix</button></div>`;
+  }
+  // Pas de nom/telephone client affiche ici : ces infos ne sont partagees
+  // qu'une fois l'offre acceptee (elles arrivent alors via chauffeurId sur
+  // la reservation elle-meme, deja lisible par le chauffeur assigne).
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${esc(r.typeEvenement)} • ${dateFmt}</div>
+      <div class="meta-row">
+        <span><b>${esc(r.nbPassagers)}</b> passagers</span>
+      </div>
+      ${r.equipementsSouhaites && r.equipementsSouhaites.length ? `<div style="margin-top:8px;"><span style="font-size:11.5px;color:var(--ink-soft);margin-right:6px;">Souhaités:</span>${equipBadges(r.equipementsSouhaites)}</div>` : ``}
+      ${r.notes ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(r.notes)}"</div>` : ``}
+      ${box}
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value"><span class="status-dot st-en_attente"></span>Ouverte aux offres</div>
+      <div class="seat-code mono">#${r.id ? r.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Chauffeur: mes stats ---------- */
+function renderChauffeurStats(){
+  const mine = state.reservations.filter(r=>r.chauffeurId === state.user.uid);
+  const termines = mine.filter(r=>r.statut==='terminee');
+  const enCours = mine.filter(r=>r.statut==='confirmee' || r.statut==='en_route');
+  const enAttenteAcceptation = mine.filter(r=>r.statut==='attente_chauffeur').length;
+  const revenuTotal = termines.reduce((sum,r)=>sum + Number(r.montantChauffeur||0), 0);
+  const notes = termines.filter(r=>r.note).map(r=>r.note);
+  const noteMoyenne = notes.length ? (notes.reduce((a,b)=>a+b,0) / notes.length) : null;
+
+  const stat = (label, value, sub, color) => `
+    <div class="stat-card">
+      <div class="stat-value" style="color:${color||'var(--night)'};">${value}</div>
+      <div class="stat-label">${esc(label)}</div>
+      ${sub ? `<div class="stat-sub">${sub}</div>` : ``}
+    </div>`;
+
+  return `
+  <div class="section-title"><h2>Mes statistiques</h2></div>
+  <div class="stat-grid">
+    ${stat("Trajets terminés", termines.length)}
+    ${stat("Trajets en cours", enCours.length, enAttenteAcceptation>0 ? `${enAttenteAcceptation} en attente de ta réponse` : "aucun en attente", enAttenteAcceptation>0 ? "#E08A1E" : null)}
+    ${stat("Revenu total", revenuTotal.toLocaleString('fr-FR') + " FCFA", `ta part après commission (${(COMMISSION_RATE*100).toFixed(0)}%)`, "var(--gold)")}
+    ${stat("Note moyenne", noteMoyenne!==null ? noteMoyenne.toFixed(1) + " ★" : "—", notes.length ? `sur ${notes.length} avis` : "aucun avis pour l'instant", "var(--gold)")}
+  </div>
+  `;
+}
+
+/* ---------- Ticket card (shared component) ---------- */
+function ticketCard(r, mode){
+  const st = r.statut;
+  const dateFmt = r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  let actions = '';
+  if(mode==='admin' && st==='en_attente'){
+    actions = `
+    <div class="assign-box">
+      <div class="grid-2">
+        <div class="field">
+          <label>Assigner un bus</label>
+          <select data-assign-bus="${r.id}">
+            <option value="">Choisir un bus</option>
+            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Assigner un chauffeur</label>
+          <select data-assign-driver="${r.id}">
+            <option value="">Choisir un chauffeur</option>
+            ${state.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${esc(d.nom)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <label>Prix convenu (FCFA)</label>
+        <input type="number" min="0" data-price="${r.id}" placeholder="Ex: 75000">
+      </div>
+      <div class="btn-row">
+        <button class="btn-sm btn-confirm" data-confirm-res="${r.id}">Confirmer la réservation</button>
+        <button class="btn-sm btn-red" data-refuse-res="${r.id}">Refuser</button>
+      </div>
+    </div>`;
+  }
+  if(mode==='admin-manage'){
+    actions = `
+    <div class="assign-box">
+      <div class="grid-2">
+        <div class="field">
+          <label>Statut</label>
+          <select data-set-statut="${r.id}">
+            ${Object.keys(STATUS_LABELS).map(k=>`<option value="${k}" ${st===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Prix (FCFA)</label>
+          <input type="number" min="0" data-set-prix="${r.id}" value="${r.prix!=null?esc(r.prix):''}" placeholder="Ex: 75000">
+        </div>
+        <div class="field">
+          <label>Bus assigné</label>
+          <select data-set-bus="${r.id}">
+            <option value="">— Aucun —</option>
+            ${state.buses.map(b=>`<option value="${b.id}" ${r.busId===b.id?'selected':''}>${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Chauffeur assigné</label>
+          <select data-set-driver="${r.id}">
+            <option value="">— Aucun —</option>
+            ${state.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}" ${r.chauffeurId===d.id?'selected':''}>${esc(d.nom)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-sm btn-confirm" data-save-res="${r.id}">Enregistrer</button>
+        <button class="btn-sm btn-ghost" data-delete-res="${r.id}">Supprimer</button>
+      </div>
+    </div>`;
+  }
+  if(mode==='chauffeur' && st==='attente_chauffeur'){
+    actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-accept-trajet="${r.id}">✅ Accepter le trajet</button><button class="btn-sm btn-red" data-reject-trajet="${r.id}">❌ Refuser</button></div>`;
+  }
+  if(mode==='chauffeur' && st==='confirmee'){
+    actions = `<div class="btn-row"><button class="btn-sm btn-night" data-start-trip="${r.id}">Démarrer le trajet</button></div>`;
+  }
+  if(mode==='chauffeur' && st==='en_route'){
+    actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-finish-trip="${r.id}">Marquer terminé</button></div>`;
+  }
+  if(mode==='chauffeur' && (st==='confirmee' || st==='en_route') && r.qrToken){
+    actions += r.embarquementValide
+      ? `<div style="margin-top:8px;font-size:12.5px;color:var(--gold);font-weight:700;">✅ Billet vérifié — passager embarqué</div>`
+      : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-night" data-scan-qr="${r.id}" data-scan-token="${esc(r.qrToken)}">📷 Scanner le billet du client</button></div>`;
+  }
+  if(mode==='client' && (st==='confirmee' || st==='en_route') && r.qrToken){
+    actions += r.embarquementValide
+      ? `<div style="margin-top:8px;font-size:12.5px;color:var(--gold);font-weight:700;">✅ Embarquement validé</div>`
+      : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-confirm" data-show-qr="${r.id}" data-qr-token="${esc(r.qrToken)}">🎫 Voir mon billet QR</button></div>`;
+  }
+  if(mode==='client' && (st==='en_attente' || st==='confirmee')){
+    actions = `<div class="btn-row"><button class="btn-sm btn-ghost" data-cancel-res="${r.id}">Annuler la réservation</button></div>`;
+  }
+  if(mode==='client' && st==='terminee' && !r.note){
+    actions = `
+    <div class="assign-box">
+      <label style="font-size:12px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;">Note ton trajet</label>
+      <div class="star-row" data-star-row="${r.id}">
+        ${[1,2,3,4,5].map(n=>`<button type="button" data-star="${n}" data-star-for="${r.id}">★</button>`).join('')}
+      </div>
+      <div class="field" style="margin-top:8px;">
+        <input type="text" id="avis-${r.id}" placeholder="Un commentaire (optionnel)">
+      </div>
+      <button class="btn-sm btn-confirm" data-submit-review="${r.id}" data-selected-note="0">Envoyer mon avis</button>
+    </div>`;
+  }
+  if(mode==='admin-manage'){
+    actions += `
+    <div class="assign-box">
+      <div class="grid-2">
+        <div class="field">
+          <label>Statut du paiement</label>
+          <select data-set-paiement="${r.id}">
+            <option value="non_paye" ${((r.paiementStatut||'non_paye')==='non_paye')?'selected':''}>Non payé</option>
+            <option value="paye" ${r.paiementStatut==='paye'?'selected':''}>Payé</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Lien de paiement (Wave / Orange Money)</label>
+          <input type="text" data-set-lien-paiement="${r.id}" value="${esc(r.lienPaiement||'')}" placeholder="https://pay.wave.com/...">
+        </div>
+      </div>
+    </div>`;
+  }
+
+  return `
+  <div class="ticket">
+    <div class="stub-main">
+      <div class="route-row">${pinIcon()}${esc(r.lieuDepart)} → ${esc(r.lieuArrivee)}</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);">${esc(r.typeEvenement)} • ${dateFmt}</div>
+      <div class="meta-row">
+        <span><b>${esc(r.nbPassagers)}</b> passagers</span>
+        <span>Contact: <b>${esc(r.clientTelephone||'—')}</b></span>
+        ${mode!=='client' ? `<span>Client: <b>${esc(r.clientNom)}</b></span>` : ``}
+        ${r.busImmat ? `<span>Bus: <b class="mono">${esc(r.busImmat)}</b></span>` : ``}
+        ${r.chauffeurNom ? `<span>Chauffeur: <b>${esc(r.chauffeurNom)}</b></span>` : ``}
+        ${r.chauffeurNom && mode.startsWith('admin') ? `<span>Tél. chauffeur: <b>${esc(r.chauffeurTelephone||'—')}</b></span>` : ``}
+        ${r.chauffeurNom && mode==='client' ? `<span>Contact chauffeur (service Teranga): <b>${esc(TERANGA_SERVICE_PHONE)}</b></span>` : ``}
+        ${r.prix ? `<span>Prix: <b>${esc(r.prix)} FCFA</b></span>` : ``}
+      </div>
+      ${r.prix && mode==='admin' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Commission Teranga: <b>${esc(r.commission||0)} FCFA</b> • Part chauffeur/propriétaire: <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
+      ${r.prix && mode==='chauffeur' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Ta part (après commission): <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
+      ${r.busEquipements && r.busEquipements.length ? `<div style="margin-top:8px;">${equipBadges(r.busEquipements)}</div>` : (r.equipementsSouhaites && r.equipementsSouhaites.length ? `<div style="margin-top:8px;"><span style="font-size:11.5px;color:var(--ink-soft);margin-right:6px;">Souhaités:</span>${equipBadges(r.equipementsSouhaites)}</div>` : ``)}
+      ${r.notes ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(r.notes)}"</div>` : ``}
+      ${r.prix ? `<div style="margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="pay-badge ${r.paiementStatut==='paye'?'paye':'non_paye'}">${r.paiementStatut==='paye'?'Payé':'Non payé'}</span>
+        ${mode==='client' && r.paiementStatut!=='paye' && r.lienPaiement ? `<a href="${esc(r.lienPaiement)}" target="_blank" rel="noopener" class="btn-sm btn-confirm" style="text-decoration:none;">Payer maintenant</a>` : ``}
+      </div>` : ``}
+      ${r.note ? `<div style="margin-top:8px;font-size:13px;color:var(--gold);">${'★'.repeat(r.note)}${'☆'.repeat(5-r.note)} ${r.avis?`<span style="color:var(--ink-soft);font-style:italic;">— "${esc(r.avis)}"</span>`:``}</div>` : ``}
+      ${r.embarquementValide && mode.startsWith('admin') ? `<div style="margin-top:4px;font-size:12px;color:var(--gold);font-weight:700;">✅ Passager embarqué (billet scanné)</div>` : ``}
+      ${st==='attente_chauffeur' && r.expiresAt ? `<div class="countdown-timer" data-expires="${r.expiresAt}">⏳ …</div>` : ``}
+      ${actions}
+    </div>
+    <div class="perforation"></div>
+    <div class="stub-side">
+      <div class="status-label">Statut</div>
+      <div class="status-value"><span class="status-dot st-${st}"></span>${STATUS_LABELS[st]||st}</div>
+      <div class="seat-code mono">#${r.id ? r.id.slice(0,6).toUpperCase() : '------'}</div>
+    </div>
+  </div>`;
+}
+
+function emptyState(title, sub){
+  return `<div class="empty-state">${busLogo(40,'var(--gold)')}<p style="font-weight:600;margin-top:6px;">${esc(title)}</p><p>${esc(sub)}</p></div>`;
+}
+
+function pinIcon(){
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-7.5 7-12a7 7 0 10-14 0c0 4.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>`;
+}
+function busLogo(size, color){
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect x="5" y="10" width="38" height="22" rx="4" fill="${color}"/>
+    <rect x="5" y="24" width="38" height="3" fill="var(--gold)"/>
+    <rect x="9" y="14" width="9" height="8" rx="1.5" fill="#FAF6EC" opacity="0.92"/>
+    <rect x="20" y="14" width="9" height="8" rx="1.5" fill="#FAF6EC" opacity="0.92"/>
+    <rect x="31" y="14" width="7" height="8" rx="1.5" fill="#FAF6EC" opacity="0.92"/>
+    <circle cx="14" cy="35" r="4" fill="#1D2420"/>
+    <circle cx="34" cy="35" r="4" fill="#1D2420"/>
+  </svg>`;
+}
+
+/* ---------- Détection de conflit bus/chauffeur (même date) ---------- */
+function findBookingConflict(dateEvenement, busId, chauffeurId, excludeId){
+  return state.reservations.find(r=>
+    r.id !== excludeId &&
+    r.dateEvenement === dateEvenement &&
+    (r.statut==='confirmee' || r.statut==='en_route' || r.statut==='attente_chauffeur') &&
+    ((busId && r.busId===busId) || (chauffeurId && r.chauffeurId===chauffeurId))
+  );
+}
+
+/* ---------- Bind panel-level events ---------- */
+function bindPanelEvents(){
+  const resForm = document.getElementById('resForm');
+  if(resForm) resForm.onsubmit = submitReservation;
+
+  const profilForm = document.getElementById('profilForm');
+  if(profilForm) profilForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const nom = document.getElementById('p-nom').value.trim();
+    const telephone = document.getElementById('p-tel').value.trim();
+    try{
+      await db.collection('users').doc(state.user.uid).update({nom, telephone});
+      state.profile.nom = nom; state.profile.telephone = telephone;
+      state.profileMsg = {type:'success', text:"Profil mis à jour."};
+      showToast("Profil mis à jour.");
+    }catch(err){
+      console.error('Erreur mise a jour profil:', err);
+      state.profileMsg = {type:'error', text: friendlyAuthError(err)};
     }
+    renderPanel();
+  };
+  const changePassBtn = document.getElementById('changePassBtn');
+  if(changePassBtn) changePassBtn.onclick = async ()=>{
+    changePassBtn.disabled = true;
+    try{
+      await auth.sendPasswordResetEmail(state.profile.email);
+      state.profileMsg = {type:'success', text:"Email envoyé ! Vérifie ta boîte de réception (et les spams)."};
+    }catch(err){
+      console.error('Erreur reinitialisation mot de passe:', err);
+      state.profileMsg = {type:'error', text: friendlyAuthError(err)};
+    }
+    changePassBtn.disabled = false;
+    renderPanel();
+  };
 
-    return res.status(200).send("OK");
-  } catch (error) {
-    console.error("Erreur paytechIPN:", error);
-    return res.status(500).send("Erreur serveur");
-  }
-});
-
-/**
- * 3. payReservationFromWallet
- * Fonction callable : paie une réservation directement depuis le solde
- * (wallet) de l'utilisateur, sans passer par PayTech.
- */
-exports.payReservationFromWallet = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-      "unauthenticated",
-      "Tu dois être connecté."
-    );
-  }
-
-  const { reservationId, amount } = data;
-  const uid = context.auth.uid;
-
-  if (!reservationId || !amount) {
-    throw new functions.https.HttpsError(
-      "invalid-argument",
-      "reservationId et amount sont requis."
-    );
-  }
-
-  const userRef = db.collection("users").doc(uid);
-  const reservationRef = db.collection("reservations").doc(reservationId);
-
-  try {
-    // Transaction pour éviter les doubles paiements / soldes incohérents
-    await db.runTransaction(async (transaction) => {
-      const userDoc = await transaction.get(userRef);
-
-      if (!userDoc.exists) {
-        throw new functions.https.HttpsError("not-found", "Utilisateur introuvable.");
-      }
-
-      const currentBalance = userDoc.data().walletBalance || 0;
-
-      if (currentBalance < amount) {
-        throw new functions.https.HttpsError(
-          "failed-precondition",
-          "Solde insuffisant."
-        );
-      }
-
-      // Débite le solde
-      transaction.update(userRef, {
-        walletBalance: admin.firestore.FieldValue.increment(-amount),
-      });
-
-      // Marque la réservation comme payée
-      transaction.update(reservationRef, {
-        status: "paid",
-        paidVia: "wallet",
-        paidAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+  const busForm = document.getElementById('busForm');
+  if(busForm) busForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    await db.collection('buses').add({
+      immatriculation: document.getElementById('b-immat').value.trim(),
+      modele: document.getElementById('b-modele').value.trim(),
+      capacite: Number(document.getElementById('b-capacite').value),
+      equipements: readEquipChoices('b-equip'),
+      statut: 'disponible',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    showToast("Bus ajouté à la flotte.");
+    renderPanel();
+  };
 
-    return { success: true };
-  } catch (error) {
-    console.error("Erreur payReservationFromWallet:", error);
-    if (error instanceof functions.https.HttpsError) throw error;
-    throw new functions.https.HttpsError("internal", error.message);
+  document.querySelectorAll('[data-del-bus]').forEach(b=>{
+    b.onclick = async ()=>{
+      await db.collection('buses').doc(b.dataset.delBus).delete();
+      showToast("Bus retiré.");
+    };
+  });
+
+  document.querySelectorAll('[data-edit-equip]').forEach(b=>{
+    b.onclick = ()=>{
+      const row = document.querySelector(`[data-equip-row="${b.dataset.editEquip}"]`);
+      if(row) row.style.display = row.style.display==='none' ? '' : 'none';
+    };
+  });
+  document.querySelectorAll('[data-cancel-equip]').forEach(b=>{
+    b.onclick = ()=>{
+      const row = document.querySelector(`[data-equip-row="${b.dataset.cancelEquip}"]`);
+      if(row) row.style.display = 'none';
+    };
+  });
+  document.querySelectorAll('[data-save-equip]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.saveEquip;
+      await db.collection('buses').doc(id).update({ equipements: readEquipChoices('be-'+id) });
+      showToast("Équipements mis à jour.");
+    };
+  });
+
+  document.querySelectorAll('[data-approve-driver]').forEach(b=>{
+    b.onclick = async ()=>{
+      await db.collection('users').doc(b.dataset.approveDriver).update({status:'active'});
+      showToast("Chauffeur validé.");
+    };
+  });
+  document.querySelectorAll('[data-reject-driver]').forEach(b=>{
+    b.onclick = async ()=>{
+      await db.collection('users').doc(b.dataset.rejectDriver).update({status:'refuse'});
+      showToast("Demande refusée.");
+    };
+  });
+
+  document.querySelectorAll('[data-confirm-res]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.confirmRes;
+      const busSel = document.querySelector(`[data-assign-bus="${id}"]`);
+      const drvSel = document.querySelector(`[data-assign-driver="${id}"]`);
+      const priceInp = document.querySelector(`[data-price="${id}"]`);
+      if(!busSel.value || !drvSel.value){
+        showToast("Choisis un bus et un chauffeur avant de confirmer.");
+        return;
+      }
+      const bus = state.buses.find(x=>x.id===busSel.value);
+      const drv = state.drivers.find(x=>x.id===drvSel.value);
+      const conflict = findBookingConflict(state.reservations.find(x=>x.id===id).dateEvenement, bus.id, drv.id, id);
+      if(conflict){
+        showToast(`Conflit : ${conflict.busId===bus.id?'ce bus':'ce chauffeur'} est déjà assigné le même jour.`);
+        return;
+      }
+      const prixVal = priceInp.value ? Number(priceInp.value) : null;
+      const split = prixVal ? calcSplit(prixVal) : { commission: null, montantChauffeur: null };
+      await db.collection('reservations').doc(id).update({
+        // Le chauffeur doit d'abord accepter avant que ce soit vraiment confirmé.
+        statut:'attente_chauffeur',
+        expiresAt: Date.now() + DRIVER_ACCEPT_TIMEOUT_MS,
+        busId: bus.id, busImmat: bus.immatriculation, busEquipements: bus.equipements || [],
+        chauffeurId: drv.id, chauffeurNom: drv.nom, chauffeurTelephone: drv.telephone || '',
+        prix: prixVal,
+        commission: split.commission,
+        montantChauffeur: split.montantChauffeur
+      });
+      showToast("Assigné. En attente d'acceptation du chauffeur.");
+    };
+  });
+  document.querySelectorAll('[data-refuse-res]').forEach(b=>{
+    b.onclick = async ()=>{
+      await db.collection('reservations').doc(b.dataset.refuseRes).update({statut:'refusee'});
+      showToast("Demande refusée.");
+    };
+  });
+  document.querySelectorAll('[data-accept-trajet]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.acceptTrajet;
+      try{
+        await db.collection('reservations').doc(id).update({statut:'confirmee', expiresAt:null, qrToken: genQrToken()});
+        showToast("Trajet accepté ! Bonne route en préparation.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-reject-trajet]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Refuser ce trajet ? L'admin devra réassigner un autre chauffeur.")) return;
+      const id = b.dataset.rejectTrajet;
+      try{
+        await db.collection('reservations').doc(id).update({
+          statut:'en_attente',
+          busId:null, busImmat:null, busEquipements:null,
+          chauffeurId:null, chauffeurNom:null,
+          expiresAt:null
+        });
+        showToast("Trajet refusé. Il repart en attente d'assignation.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
+  /* ---- Marché des propositions chauffeur <-> client ---- */
+  document.querySelectorAll('[data-open-propose]').forEach(b=>{
+    b.onclick = ()=>{ state.proposingFor = b.dataset.openPropose; renderPanel(); };
+  });
+  document.querySelectorAll('[data-cancel-propose-form]').forEach(b=>{
+    b.onclick = ()=>{ state.proposingFor = null; renderPanel(); };
+  });
+  document.querySelectorAll('[data-submit-proposition]').forEach(b=>{
+    b.onclick = async ()=>{
+      const resId = b.dataset.submitProposition;
+      const req = state.openRequests.find(r=>r.id===resId);
+      if(!req){ showToast("Cette demande n'est plus disponible."); state.proposingFor=null; renderPanel(); return; }
+      const prixInp = document.getElementById(`propPrix-${resId}`);
+      const busSel = document.getElementById(`propBus-${resId}`);
+      const msgInp = document.getElementById(`propMsg-${resId}`);
+      const prixPropose = prixInp && prixInp.value ? Number(prixInp.value) : 0;
+      if(!prixPropose || prixPropose<=0){ showToast("Indique le prix que tu veux recevoir."); return; }
+      const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+      try{
+        await db.collection('propositions').add({
+          reservationId: resId,
+          clientId: req.clientId,
+          chauffeurId: state.user.uid,
+          chauffeurNom: state.profile.nom || state.profile.email,
+          chauffeurTelephone: state.profile.telephone || '',
+          busId: bus ? bus.id : null,
+          busImmat: bus ? bus.immatriculation : null,
+          busEquipements: bus ? (bus.equipements || []) : null,
+          prixPropose,
+          commission: calcPropositionCommission(prixPropose),
+          prixTotal: prixPropose + calcPropositionCommission(prixPropose),
+          message: msgInp ? msgInp.value.trim() : '',
+          statut: 'en_attente',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        state.proposingFor = null;
+        showToast("Offre envoyée au client !");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-cancel-proposition]').forEach(b=>{
+    b.onclick = async ()=>{
+      try{
+        await db.collection('propositions').doc(b.dataset.cancelProposition).delete();
+        showToast("Offre retirée.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  document.querySelectorAll('[data-choose-proposition]').forEach(b=>{
+    b.onclick = async ()=>{
+      const propId = b.dataset.chooseProposition;
+      const prop = state.propositions.find(p=>p.id===propId);
+      if(!prop) return;
+      if(!confirm(`Réserver avec ${prop.chauffeurNom} pour ${Number(prop.prixTotal||0).toLocaleString('fr-FR')} FCFA ?`)) return;
+      try{
+        // Transaction : verifie que la demande est toujours ouverte et
+        // qu'il n'y a pas de conflit bus/chauffeur avant de confirmer,
+        // pour eviter qu'un admin et un client ne confirment la meme
+        // demande en meme temps.
+        await db.runTransaction(async (tx)=>{
+          const resRef = db.collection('reservations').doc(prop.reservationId);
+          const resSnap = await tx.get(resRef);
+          if(!resSnap.exists) throw new Error("Réservation introuvable.");
+          const resData = resSnap.data();
+          if(resData.statut !== 'en_attente') throw new Error("Cette demande n'est plus disponible.");
+          const conflict = findBookingConflict(resData.dateEvenement, prop.busId, prop.chauffeurId, prop.reservationId);
+          if(conflict) throw new Error("Ce chauffeur (ou ce bus) est déjà pris ce jour-là. Choisis une autre offre.");
+          tx.update(resRef, {
+            statut: 'confirmee',
+            chauffeurId: prop.chauffeurId, chauffeurNom: prop.chauffeurNom, chauffeurTelephone: prop.chauffeurTelephone || '',
+            busId: prop.busId || null, busImmat: prop.busImmat || null, busEquipements: prop.busEquipements || null,
+            prix: prop.prixTotal, commission: prop.commission, montantChauffeur: prop.prixPropose,
+            paiementStatut: 'non_paye',
+            qrToken: genQrToken()
+          });
+          tx.update(db.collection('propositions').doc(propId), {statut:'acceptee'});
+        });
+        // Les autres offres reçues sur cette demande deviennent caduques
+        // (best-effort, hors transaction : ce n'est qu'un nettoyage d'affichage).
+        const others = state.propositions.filter(p=>p.reservationId===prop.reservationId && p.id!==propId && p.statut==='en_attente');
+        if(others.length){
+          const batch = db.batch();
+          others.forEach(o=> batch.update(db.collection('propositions').doc(o.id), {statut:'refusee'}));
+          await batch.commit();
+        }
+        showToast("Réservation confirmée avec ce chauffeur !");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+  /* ---- Trajets publies par un chauffeur a l'avance (sans demande client) ---- */
+  const tpForm = document.getElementById('trajetProposeForm');
+  if(tpForm) tpForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const depart = document.getElementById('tp-depart').value.trim();
+    const arrivee = document.getElementById('tp-arrivee').value.trim();
+    const date = document.getElementById('tp-date').value;
+    const places = Number(document.getElementById('tp-places').value)||0;
+    const prix = Number(document.getElementById('tp-prix').value)||0;
+    const busSel = document.getElementById('tp-bus');
+    const msg = document.getElementById('tp-msg').value.trim();
+    if(!depart || !arrivee || !date || !places || !prix){ showToast("Remplis tous les champs obligatoires."); return; }
+    const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+    try{
+      await db.collection('trajetsProposes').add({
+        chauffeurId: state.user.uid,
+        chauffeurNom: state.profile.nom || state.profile.email,
+        chauffeurTelephone: state.profile.telephone || '',
+        lieuDepart: depart, lieuArrivee: arrivee, dateEvenement: date,
+        placesDisponibles: places,
+        prixPropose: prix, commission: calcPropositionCommission(prix), prixTotal: prix + calcPropositionCommission(prix),
+        busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements||[]) : null,
+        message: msg,
+        statut: 'ouvert',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showToast("Trajet publié ! Les clients peuvent maintenant le voir.");
+      tpForm.reset();
+    }catch(err){ showToast("Erreur : " + err.message); }
+  };
+
+  document.querySelectorAll('[data-cancel-trajet-propose]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Retirer ce trajet publié ?")) return;
+      try{
+        await db.collection('trajetsProposes').doc(b.dataset.cancelTrajetPropose).update({statut:'annule'});
+        showToast("Trajet retiré.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
+  document.querySelectorAll('[data-edit-trajet]').forEach(b=>{
+    b.onclick = ()=>{ state.editingTrajet = b.dataset.editTrajet; renderPanel(); };
+  });
+  document.querySelectorAll('[data-cancel-edit-trajet]').forEach(b=>{
+    b.onclick = ()=>{ state.editingTrajet = null; renderPanel(); };
+  });
+  if(state.editingTrajet){
+    const editForm = document.getElementById(`trajetEditForm-${state.editingTrajet}`);
+    if(editForm) editForm.onsubmit = async (e)=>{
+      e.preventDefault();
+      const id = state.editingTrajet;
+      const depart = document.getElementById(`tpe-depart-${id}`).value.trim();
+      const arrivee = document.getElementById(`tpe-arrivee-${id}`).value.trim();
+      const date = document.getElementById(`tpe-date-${id}`).value;
+      const places = Number(document.getElementById(`tpe-places-${id}`).value)||0;
+      const prix = Number(document.getElementById(`tpe-prix-${id}`).value)||0;
+      const busSel = document.getElementById(`tpe-bus-${id}`);
+      const msg = document.getElementById(`tpe-msg-${id}`).value.trim();
+      if(!depart || !arrivee || !date || !places || !prix){ showToast("Remplis tous les champs obligatoires."); return; }
+      const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+      try{
+        await db.collection('trajetsProposes').doc(id).update({
+          lieuDepart: depart, lieuArrivee: arrivee, dateEvenement: date,
+          placesDisponibles: places,
+          prixPropose: prix, commission: calcPropositionCommission(prix), prixTotal: prix + calcPropositionCommission(prix),
+          busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements||[]) : null,
+          message: msg
+        });
+        state.editingTrajet = null;
+        showToast("Trajet modifié !");
+      }catch(err){ showToast("Erreur : " + err.message); }
+    };
   }
-})
+
+  const cts = document.getElementById('clientTrajetSearch');
+  if(cts) cts.oninput = ()=>{ state.clientTrajetSearch = cts.value; const p=cts.selectionStart; renderPanel(); const n=document.getElementById('clientTrajetSearch'); if(n){ n.focus(); n.setSelectionRange(p,p); } };
+
+  /* ---- Portefeuille : recharge PayTech + paiement du solde ---- */
+  const rechargeForm = document.getElementById('rechargeForm');
+  if(rechargeForm) rechargeForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const amount = Number(document.getElementById('rc-montant').value)||0;
+    if(amount < 500){ showToast("Montant minimum : 500 FCFA."); return; }
+    const btn = document.getElementById('rechargeSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Redirection vers PayTech...';
+    try{
+      const res = await callServer('/api/create-payment', {
+        amount,
+        itemName: "Recharge Teranga Trans",
+        ref_command: `RECHARGE-${state.user.uid}-${Date.now()}`
+      });
+      if(res && res.redirect_url){
+        window.location.href = res.redirect_url;
+      } else {
+        throw new Error("Réponse PayTech invalide.");
+      }
+    }catch(err){
+      showToast("Erreur : " + (err.message || "impossible de lancer le paiement."));
+      btn.disabled = false; btn.textContent = 'Recharger via PayTech';
+    }
+  };
+
+  document.querySelectorAll('[data-pay-proposition-wallet]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Payer cette offre directement avec ton solde ?")) return;
+      b.disabled = true; b.textContent = 'Paiement en cours...';
+      try{
+        await callServer('/api/pay-from-wallet', {type:'proposition', id: b.dataset.payPropositionWallet});
+        showToast("Payé avec ton solde ! Réservation confirmée.");
+      }catch(err){
+        showToast("Erreur : " + (err.message || "paiement impossible."));
+        b.disabled = false; b.textContent = '💳 Payer avec mon solde';
+      }
+    };
+  });
+
+  document.querySelectorAll('[data-pay-trajet-wallet]').forEach(b=>{
+    b.onclick = async ()=>{
+      const trajetId = b.dataset.payTrajetWallet;
+      const trajet = state.trajetsProposes.find(t=>t.id===trajetId);
+      if(!trajet) return;
+      const passagersStr = prompt(`Combien de passagers ? (max ${trajet.placesDisponibles})`, String(trajet.placesDisponibles));
+      if(passagersStr===null) return;
+      const passagers = Number(passagersStr);
+      if(!passagers || passagers<=0 || passagers>trajet.placesDisponibles){ showToast("Nombre de passagers invalide."); return; }
+      if(!confirm(`Payer ce trajet directement avec ton solde (${Number(trajet.prixTotal||0).toLocaleString('fr-FR')} FCFA) ?`)) return;
+      b.disabled = true; b.textContent = 'Paiement en cours...';
+      try{
+        await callServer('/api/pay-from-wallet', {type:'trajet', id: trajetId, passagers});
+        showToast("Payé avec ton solde ! Réservation confirmée.");
+      }catch(err){
+        showToast("Erreur : " + (err.message || "paiement impossible."));
+        b.disabled = false; b.textContent = '💳 Payer avec mon solde';
+      }
+    };
+  });
+
+  document.querySelectorAll('[data-book-trajet-propose]').forEach(b=>{
+    b.onclick = async ()=>{
+      const trajetId = b.dataset.bookTrajetPropose;
+      const trajet = state.trajetsProposes.find(t=>t.id===trajetId);
+      if(!trajet) return;
+      const passagersStr = prompt(`Combien de passagers ? (max ${trajet.placesDisponibles})`, String(trajet.placesDisponibles));
+      if(passagersStr===null) return;
+      const passagers = Number(passagersStr);
+      if(!passagers || passagers<=0 || passagers>trajet.placesDisponibles){ showToast("Nombre de passagers invalide."); return; }
+      if(!confirm(`Réserver ce trajet avec ${trajet.chauffeurNom} pour ${Number(trajet.prixTotal||0).toLocaleString('fr-FR')} FCFA ?`)) return;
+      try{
+        // Transaction : verifie que le trajet est toujours ouvert et qu'il
+        // n'y a pas de conflit bus/chauffeur avant de creer la reservation,
+        // pour eviter que deux clients ne reservent le meme trajet en meme temps.
+        await db.runTransaction(async (tx)=>{
+          const trajetRef = db.collection('trajetsProposes').doc(trajetId);
+          const trajetSnap = await tx.get(trajetRef);
+          if(!trajetSnap.exists) throw new Error("Ce trajet n'est plus disponible.");
+          const tData = trajetSnap.data();
+          if(tData.statut !== 'ouvert') throw new Error("Ce trajet vient d'être réservé par quelqu'un d'autre.");
+          const conflict = findBookingConflict(tData.dateEvenement, tData.busId, tData.chauffeurId, null);
+          if(conflict) throw new Error("Ce chauffeur (ou ce bus) est déjà pris ce jour-là.");
+          const resRef = db.collection('reservations').doc();
+          tx.set(resRef, {
+            clientId: state.user.uid,
+            clientNom: state.profile.nom || state.profile.email,
+            clientTelephone: state.profile.telephone || '',
+            typeEvenement: "Trajet proposé",
+            dateEvenement: tData.dateEvenement,
+            lieuDepart: tData.lieuDepart, lieuArrivee: tData.lieuArrivee,
+            nbPassagers: passagers,
+            equipementsSouhaites: [],
+            notes: '',
+            statut: 'confirmee',
+            busId: tData.busId||null, busImmat: tData.busImmat||null, busEquipements: tData.busEquipements||null,
+            chauffeurId: tData.chauffeurId, chauffeurNom: tData.chauffeurNom, chauffeurTelephone: tData.chauffeurTelephone||'',
+            prix: tData.prixTotal, commission: tData.commission, montantChauffeur: tData.prixPropose,
+            paiementStatut: 'non_paye',
+            qrToken: genQrToken(),
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          tx.update(trajetRef, {statut:'reserve'});
+        });
+        showToast("Trajet réservé ! Retrouve-le dans « Mes réservations ».");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
+  const us = document.getElementById('userSearch');
+  if(us) us.oninput = ()=>{ state.userSearch = us.value; const p=us.selectionStart; renderPanel(); const n=document.getElementById('userSearch'); if(n){ n.focus(); n.setSelectionRange(p,p); } };
+
+  document.querySelectorAll('[data-filter]').forEach(b=>{
+    b.onclick = ()=>{ state.filterStatut = b.dataset.filter; renderPanel(); };
+  });
+
+  const crs = document.getElementById('clientResSearch');
+  if(crs) crs.oninput = ()=>{ state.clientSearch = crs.value; const p=crs.selectionStart; renderPanel(); const n=document.getElementById('clientResSearch'); if(n){ n.focus(); n.setSelectionRange(p,p); } };
+  document.querySelectorAll('[data-client-filter]').forEach(b=>{
+    b.onclick = ()=>{ state.clientFilterStatut = b.dataset.clientFilter; renderPanel(); };
+  });
+
+  document.querySelectorAll('[data-suspend-user]').forEach(b=>{
+    b.onclick = async ()=>{ await db.collection('users').doc(b.dataset.suspendUser).update({status:'refuse'}); showToast("Utilisateur suspendu."); };
+  });
+  document.querySelectorAll('[data-activate-user]').forEach(b=>{
+    b.onclick = async ()=>{ await db.collection('users').doc(b.dataset.activateUser).update({status:'active'}); showToast("Utilisateur activé."); };
+  });
+
+  document.querySelectorAll('[data-save-res]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.saveRes;
+      const statut = document.querySelector(`[data-set-statut="${id}"]`).value;
+      const busId = document.querySelector(`[data-set-bus="${id}"]`).value;
+      const drvId = document.querySelector(`[data-set-driver="${id}"]`).value;
+      const prixV = document.querySelector(`[data-set-prix="${id}"]`).value;
+      const paiementEl = document.querySelector(`[data-set-paiement="${id}"]`);
+      const lienEl = document.querySelector(`[data-set-lien-paiement="${id}"]`);
+      const bus = state.buses.find(x=>x.id===busId);
+      const drv = state.drivers.find(x=>x.id===drvId);
+      if((statut==='confirmee' || statut==='en_route') && (bus || drv)){
+        const conflict = findBookingConflict(state.reservations.find(x=>x.id===id).dateEvenement, bus?bus.id:null, drv?drv.id:null, id);
+        if(conflict){
+          showToast(`Conflit : ${bus && conflict.busId===bus.id?'ce bus':'ce chauffeur'} est déjà assigné le même jour.`);
+          return;
+        }
+      }
+      const prixNum = prixV ? Number(prixV) : null;
+      const splitSave = prixNum ? calcSplit(prixNum) : { commission: null, montantChauffeur: null };
+      const existingRes = state.reservations.find(x=>x.id===id);
+      const needsToken = (statut==='confirmee' || statut==='en_route') && existingRes && !existingRes.qrToken;
+      await db.collection('reservations').doc(id).update({
+        statut,
+        busId: bus ? bus.id : null,
+        busImmat: bus ? bus.immatriculation : null,
+        busEquipements: bus ? (bus.equipements || []) : null,
+        chauffeurId: drv ? drv.id : null,
+        chauffeurNom: drv ? drv.nom : null,
+        prix: prixNum,
+        commission: splitSave.commission,
+        montantChauffeur: splitSave.montantChauffeur,
+        paiementStatut: paiementEl ? paiementEl.value : 'non_paye',
+        lienPaiement: lienEl ? lienEl.value.trim() : null,
+        ...(needsToken ? {qrToken: genQrToken()} : {})
+      });
+      showToast("Réservation mise à jour.");
+    };
+  });
+  document.querySelectorAll('[data-cancel-res]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Annuler cette réservation ?")) return;
+      await db.collection('reservations').doc(b.dataset.cancelRes).update({statut:'annulee'});
+      showToast("Réservation annulée.");
+    };
+  });
+
+  document.querySelectorAll('[data-star]').forEach(starBtn=>{
+    starBtn.onclick = ()=>{
+      const forId = starBtn.dataset.starFor;
+      const n = Number(starBtn.dataset.star);
+      const row = document.querySelector(`[data-star-row="${forId}"]`);
+      row.querySelectorAll('[data-star]').forEach(s=>{
+        s.classList.toggle('filled', Number(s.dataset.star) <= n);
+      });
+      const submitBtn = document.querySelector(`[data-submit-review="${forId}"]`);
+      if(submitBtn) submitBtn.dataset.selectedNote = String(n);
+    };
+  });
+  document.querySelectorAll('[data-submit-review]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.submitReview;
+      const note = Number(b.dataset.selectedNote || 0);
+      if(!note){ showToast("Choisis une note (1 à 5 étoiles) avant d'envoyer."); return; }
+      const avisEl = document.getElementById(`avis-${id}`);
+      await db.collection('reservations').doc(id).update({
+        note, avis: avisEl ? avisEl.value.trim() : ''
+      });
+      showToast("Merci pour ton avis !");
+    };
+  });
+
+  document.querySelectorAll('[data-delete-res]').forEach(b=>{
+    b.onclick = async ()=>{
+      if(!confirm("Supprimer définitivement cette réservation ?")) return;
+      await db.collection('reservations').doc(b.dataset.deleteRes).delete();
+      showToast("Réservation supprimée.");
+    };
+  });
+
+  document.querySelectorAll('[data-start-trip]').forEach(b=>{
+    b.onclick = async ()=>{
+      await db.collection('reservations').doc(b.dataset.startTrip).update({statut:'en_route'});
+      showToast("Trajet démarré. Bonne route !");
+    };
+  });
+  document.querySelectorAll('[data-finish-trip]').forEach(b=>{
+    b.onclick = async ()=>{
+      await db.collection('reservations').doc(b.dataset.finishTrip).update({statut:'terminee'});
+      showToast("Trajet marqué terminé.");
+    };
+  });
+
+  /* ---- Billet QR client : affichage ---- */
+  document.querySelectorAll('[data-show-qr]').forEach(b=>{
+    b.onclick = ()=>{
+      openQrDisplayModal(b.dataset.showQr, b.dataset.qrToken);
+    };
+  });
+
+  /* ---- Billet QR chauffeur : scan camera pour valider l'embarquement ---- */
+  document.querySelectorAll('[data-scan-qr]').forEach(b=>{
+    b.onclick = ()=>{
+      openQrScanModal(b.dataset.scanQr, b.dataset.scanToken);
+    };
+  });
+}
+
+/* =========================================================
+   Modale d'affichage du billet QR (cote client)
+   ========================================================= */
+function openQrDisplayModal(resId, token){
+  const old = document.getElementById('qrModalOverlay');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'qrModalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:26px;max-width:320px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35);">
+      <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">Ton billet Teranga Trans</div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:14px;">Montre ce QR au chauffeur à la montée dans le bus.</div>
+      <div id="qrCanvasHolder" style="display:flex;justify-content:center;margin-bottom:14px;"></div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:14px;">Réf. #${esc(resId.slice(0,6).toUpperCase())}</div>
+      <button class="btn-sm btn-ghost" id="qrModalCloseBtn" style="width:100%;">Fermer</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  document.getElementById('qrModalCloseBtn').onclick = ()=> overlay.remove();
+  const holder = document.getElementById('qrCanvasHolder');
+  const payload = JSON.stringify({resId, token});
+  new QRCode(holder, { text: payload, width: 220, height: 220, colorDark: "#1A1A2E", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M });
+}
+
+/* =========================================================
+   Modale de scan camera (cote chauffeur) — valide l'embarquement
+   d'UNE reservation precise : le QR scanne doit correspondre a
+   la fois au resId et au token de CETTE reservation.
+   ========================================================= */
+function openQrScanModal(resId, expectedToken){
+  const old = document.getElementById('qrScanOverlay');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'qrScanOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:20px;max-width:340px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35);">
+      <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">Scanner le billet du client</div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;">Vise le QR affiché sur le téléphone du passager.</div>
+      <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;">
+        <video id="qrScanVideo" style="width:100%;display:block;" playsinline muted></video>
+      </div>
+      <div id="qrScanStatus" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);min-height:18px;"></div>
+      <button class="btn-sm btn-ghost" id="qrScanCloseBtn" style="width:100%;margin-top:10px;">Annuler</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const statusEl = document.getElementById('qrScanStatus');
+  const videoEl = document.getElementById('qrScanVideo');
+  let scanner = null;
+  let closed = false;
+
+  function closeModal(){
+    closed = true;
+    if(scanner){ scanner.stop(); scanner.destroy(); scanner = null; }
+    overlay.remove();
+  }
+  overlay.onclick = (e)=>{ if(e.target===overlay) closeModal(); };
+  document.getElementById('qrScanCloseBtn').onclick = closeModal;
+
+  if(!window.QrScanner || !QrScanner.hasCamera){
+    statusEl.textContent = "Caméra indisponible sur cet appareil/navigateur.";
+  }
+
+  scanner = new QrScanner(videoEl, async (result)=>{
+    if(closed) return;
+    const raw = result && result.data ? result.data : result;
+    let parsed;
+    try{ parsed = JSON.parse(raw); }catch(e){
+      statusEl.textContent = "QR non reconnu — réessaie.";
+      return;
+    }
+    if(!parsed || parsed.resId !== resId || parsed.token !== expectedToken){
+      statusEl.textContent = "❌ Ce billet ne correspond pas à cette réservation.";
+      return;
+    }
+    // Verification anti-fraude + ecriture atomique cote Firestore : on
+    // s'assure qu'il n'a pas deja ete scanne avant de valider.
+    scanner.stop();
+    statusEl.textContent = "Vérification…";
+    try{
+      await db.runTransaction(async (tx)=>{
+        const ref = db.collection('reservations').doc(resId);
+        const snap = await tx.get(ref);
+        if(!snap.exists) throw new Error("Réservation introuvable.");
+        const data = snap.data();
+        if(data.qrToken !== expectedToken) throw new Error("Billet invalide.");
+        if(data.embarquementValide) throw new Error("Ce billet a déjà été scanné.");
+        tx.update(ref, {
+          embarquementValide: true,
+          embarquementAt: firebase.firestore.FieldValue.serverTimestamp(),
+          embarquementPar: state.user ? state.user.uid : null
+        });
+      });
+      statusEl.textContent = "✅ Billet valide — passager embarqué !";
+      showToast("Passager embarqué avec succès !");
+      setTimeout(closeModal, 1200);
+    }catch(err){
+      statusEl.textContent = "❌ " + err.message;
+    }
+  }, { returnDetailedScanResult: true });
+
+  scanner.start().catch(()=>{
+    statusEl.textContent = "Impossible d'accéder à la caméra. Vérifie les permissions.";
+  });
+}
+
+/* =========================================================
+   SUIVI GPS EN DIRECT (chauffeur <-> client)
+   Chaque partie publie sa position dans suivi/{reservationId}
+   et voit celle de l'autre sur une carte, avec distance + ETA.
+   ========================================================= */
+const TRACK_SPEED_KMH = 32;          // vitesse moyenne urbaine Dakar
+const TRACK_MIN_WRITE_MS = 8000;     // ecriture Firestore max toutes les 8s
+const TRACK_STALE_MS = 2 * 60 * 1000;// position consideree "perdue" apres 2 min
+
+let trackWatchId = null;
+let trackWatchResId = null;
+let trackLastWrite = 0;
+let trackUnsub = null;
+let trackMap = null;
+let trackMarkers = {};
+let trackLine = null;
+let trackTick = null;
+
+function trackRole(){
+  const r = state.profile && state.profile.role;
+  return r === 'chauffeur' ? 'chauffeur' : (r === 'client' ? 'client' : 'admin');
+}
+
+function haversineKm(a, b){
+  if(!a || !b) return null;
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat/2)**2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function etaText(km){
+  if(km == null) return '—';
+  const min = Math.max(1, Math.round((km / TRACK_SPEED_KMH) * 60));
+  if(min < 60) return `${min} min`;
+  return `${Math.floor(min/60)} h ${String(min%60).padStart(2,'0')}`;
+}
+
+function distText(km){
+  if(km == null) return '—';
+  return km < 1 ? `${Math.round(km*1000)} m` : `${km.toFixed(1)} km`;
+}
+
+/* Ecrit ma position (throttlee) pour une reservation donnee. */
+async function pushMyPosition(resId, coords, force){
+  const now = Date.now();
+  if(!force && now - trackLastWrite < TRACK_MIN_WRITE_MS) return;
+  trackLastWrite = now;
+  const who = trackRole();
+  if(who === 'admin') return;
+  const payload = {
+    reservationId: resId,
+    updatedAt: now
+  };
+  payload[who === 'chauffeur' ? 'chauffeurPos' : 'clientPos'] = {
+    lat: coords.latitude,
+    lng: coords.longitude,
+    precision: Math.round(coords.accuracy || 0),
+    vitesse: coords.speed != null && coords.speed >= 0 ? Math.round(coords.speed * 3.6) : null,
+    ts: now,
+    nom: (state.profile && state.profile.nom) || ''
+  };
+  try {
+    await db.collection('suivi').doc(resId).set(payload, {merge:true});
+  } catch(e){ console.error('Erreur envoi position', e); }
+}
+
+/* Demarre/arrete le partage GPS selon la reservation active. */
+function startSharing(resId){
+  if(!navigator.geolocation) return false;
+  if(trackWatchId != null && trackWatchResId === resId) return true;
+  stopSharing();
+  trackWatchResId = resId;
+  trackWatchId = navigator.geolocation.watchPosition(
+    pos => pushMyPosition(resId, pos.coords, false),
+    err => console.warn('GPS indisponible', err && err.message),
+    {enableHighAccuracy:true, maximumAge:5000, timeout:20000}
+  );
+  return true;
+}
+function stopSharing(){
+  if(trackWatchId != null){ navigator.geolocation.clearWatch(trackWatchId); }
+  trackWatchId = null; trackWatchResId = null;
+}
+
+/* Trajet en cours = celui qu'on suit automatiquement en arriere-plan. */
+function activeTripForMe(){
+  const role = trackRole();
+  if(role === 'admin') return null;
+  const uid = state.user && state.user.uid;
+  if(!uid) return null;
+  return state.reservations.find(r =>
+    (r.statut === 'en_route' || r.statut === 'confirmee') &&
+    (role === 'chauffeur' ? r.chauffeurId === uid : r.clientId === uid)
+  ) || null;
+}
+
+function syncBackgroundSharing(){
+  if(!state.user || !state.profile) { stopSharing(); return; }
+  const trip = activeTripForMe();
+  if(trip) startSharing(trip.id);
+  else if(!document.getElementById('trackModalOverlay')) stopSharing();
+}
+
+/* ---------- Modale carte ---------- */
+function openTrackingModal(resId){
+  const res = state.reservations.find(r=>r.id===resId);
+  const old = document.getElementById('trackModalOverlay');
+  if(old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'trackModalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.35);">
+      <div style="background:var(--night);color:var(--cream);padding:14px 18px;">
+        <div style="font-weight:700;font-size:15px;">Suivi en direct</div>
+        <div style="font-size:12px;opacity:.8;margin-top:2px;">${res ? esc(res.lieuDepart) + ' → ' + esc(res.lieuArrivee) : 'Trajet'}</div>
+      </div>
+      <div id="trackMap" style="height:300px;width:100%;background:#EDE8DA;"></div>
+      <div style="padding:14px 18px 18px;">
+        <div style="display:flex;gap:10px;text-align:center;margin-bottom:10px;">
+          <div style="flex:1;background:var(--cream);border-radius:10px;padding:10px;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);">Distance</div>
+            <div id="trackDist" class="mono" style="font-size:18px;font-weight:700;color:var(--night);">—</div>
+          </div>
+          <div style="flex:1;background:var(--cream);border-radius:10px;padding:10px;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);">Temps estimé</div>
+            <div id="trackEta" class="mono" style="font-size:18px;font-weight:700;color:var(--gold);">—</div>
+          </div>
+        </div>
+        <div id="trackInfo" style="font-size:12.5px;color:var(--ink-soft);line-height:1.6;margin-bottom:12px;">Recherche du signal GPS…</div>
+        <button class="btn-sm btn-ghost" id="trackCloseBtn" style="width:100%;">Fermer</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = ()=>{
+    overlay.remove();
+    if(trackUnsub){ trackUnsub(); trackUnsub = null; }
+    if(trackTick){ clearInterval(trackTick); trackTick = null; }
+    if(trackMap){ trackMap.remove(); trackMap = null; }
+    trackMarkers = {}; trackLine = null;
+    syncBackgroundSharing();
+  };
+  overlay.onclick = e => { if(e.target === overlay) close(); };
+  document.getElementById('trackCloseBtn').onclick = close;
+
+  // Je partage ma position tant que la carte est ouverte
+  const role = trackRole();
+  if(role !== 'admin'){
+    if(!navigator.geolocation){
+      document.getElementById('trackInfo').textContent = "Ce téléphone ne permet pas la géolocalisation.";
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        p => pushMyPosition(resId, p.coords, true),
+        e => {
+          const info = document.getElementById('trackInfo');
+          if(info) info.innerHTML = "⚠️ Position refusée. Autorise la localisation dans les réglages du téléphone pour être visible par l'autre partie.";
+        },
+        {enableHighAccuracy:true, timeout:20000}
+      );
+      startSharing(resId);
+    }
+  }
+
+  if(!window.L){
+    document.getElementById('trackMap').innerHTML = '<div style="padding:20px;text-align:center;font-size:13px;color:#5B6358;">Carte indisponible (pas de connexion). Les distances restent affichées.</div>';
+  } else {
+    trackMap = L.map('trackMap', {zoomControl:true, attributionControl:false}).setView([14.7167, -17.4677], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(trackMap);
+    setTimeout(()=>{ if(trackMap) trackMap.invalidateSize(); }, 200);
+  }
+
+  const icon = (emoji, color) => window.L ? L.divIcon({
+    className:'',
+    html:`<div style="background:${color};color:#fff;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 3px 10px rgba(0,0,0,.35);border:2px solid #fff;">${emoji}</div>`,
+    iconSize:[34,34], iconAnchor:[17,17]
+  }) : null;
+
+  let latest = {};
+  const paint = ()=>{
+    const d = latest || {};
+    const bus = d.chauffeurPos, cli = d.clientPos;
+    const km = haversineKm(bus, cli);
+    const distEl = document.getElementById('trackDist');
+    const etaEl = document.getElementById('trackEta');
+    const infoEl = document.getElementById('trackInfo');
+    if(!distEl) return;
+    distEl.textContent = distText(km);
+    etaEl.textContent = etaText(km);
+
+    const now = Date.now();
+    const line = (label, pos, self) => {
+      if(!pos) return `<div>${label} : <b>en attente de sa position…</b></div>`;
+      const age = Math.round((now - (pos.ts||0))/1000);
+      const stale = (now - (pos.ts||0)) > TRACK_STALE_MS;
+      return `<div>${label}${pos.nom?` (${esc(pos.nom)})`:''} : <b style="color:${stale?'var(--red)':'var(--night)'}">${stale?'signal perdu':'en direct'}</b>`
+        + ` — maj il y a ${age < 60 ? age + ' s' : Math.round(age/60) + ' min'}`
+        + (pos.vitesse != null ? ` • ${pos.vitesse} km/h` : '')
+        + (self ? ' • c\'est toi' : '') + `</div>`;
+    };
+    infoEl.innerHTML =
+      line('🚌 Chauffeur', bus, role==='chauffeur') +
+      line('🧍 Client', cli, role==='client') +
+      (km != null ? `<div style="margin-top:6px;color:var(--night);">Arrivée estimée du bus vers <b>${new Date(Date.now() + Math.max(1, Math.round(km/TRACK_SPEED_KMH*60))*60000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</b></div>` : '');
+
+    if(!trackMap || !window.L) return;
+    const pts = [];
+    [['bus', bus, '🚌', '#0B3D24'], ['cli', cli, '🧍', '#C1272D']].forEach(([key, pos, emoji, color])=>{
+      if(!pos) return;
+      const ll = [pos.lat, pos.lng];
+      pts.push(ll);
+      if(trackMarkers[key]) trackMarkers[key].setLatLng(ll);
+      else trackMarkers[key] = L.marker(ll, {icon: icon(emoji, color)}).addTo(trackMap);
+    });
+    if(pts.length === 2){
+      if(trackLine) trackLine.setLatLngs(pts);
+      else trackLine = L.polyline(pts, {color:'#D4A017', weight:4, dashArray:'8 8'}).addTo(trackMap);
+      trackMap.fitBounds(pts, {padding:[45,45], maxZoom:15});
+    } else if(pts.length === 1){
+      trackMap.setView(pts[0], 14);
+    }
+  };
+
+  trackUnsub = db.collection('suivi').doc(resId).onSnapshot(snap=>{
+    latest = snap.exists ? snap.data() : {};
+    paint();
+  }, err=>{
+    console.error('Erreur écoute suivi', err);
+    const info = document.getElementById('trackInfo');
+    if(info) info.textContent = "Impossible de lire le suivi pour l'instant.";
+  });
+  trackTick = setInterval(paint, 5000);
+  paint();
+}
+
+/* Ouverture via delegation (les cartes sont re-rendues en permanence). */
+document.addEventListener('click', e=>{
+  const btn = e.target.closest && e.target.closest('[data-track-res]');
+  if(!btn) return;
+  openTrackingModal(btn.dataset.trackRes);
+});
+
+/* ================= FIRESTORE LISTENERS ================= */
+let unsubs = [];
+let unsubProfile = null;
+function clearListeners(){ unsubs.forEach(u=>u()); unsubs = []; if(unsubProfile){ unsubProfile(); unsubProfile = null; } }
+
+function attachListeners(){
+  clearListeners();
+  const role = state.profile.role;
+  const uid = state.user.uid;
+
+  // Chaque rôle ne lit que ce qui le concerne : un client ne doit jamais
+  // recevoir les réservations (et numéros de téléphone) des autres clients,
+  // et pareil pour un chauffeur. Seul l'admin voit tout. Ce découpage doit
+  // correspondre exactement à firestore.rules (sinon les règles bloqueront
+  // ces lectures une fois activées).
+  let reservationsQuery = db.collection('reservations');
+  if(role === 'client') reservationsQuery = reservationsQuery.where('clientId','==', uid);
+  else if(role === 'chauffeur') reservationsQuery = reservationsQuery.where('chauffeurId','==', uid);
+
+  state.knownStatuts = {};
+  unsubs.push(reservationsQuery.onSnapshot(snap=>{
+    const next = snap.docs.map(d=>{
+      const data = d.data();
+      return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+    });
+    // Notification en temps reel (client/chauffeur uniquement) : on compare
+    // le statut connu de chaque reservation avec le nouveau, et on previent
+    // l'utilisateur si un admin/chauffeur vient de le faire evoluer.
+    // NB: pas d'email/SMS ici (ca demanderait un backend + une cle API
+    // tierce type SendGrid/Twilio) - ceci est une notification "en session".
+    if(role !== 'admin'){
+      next.forEach(r=>{
+        const prev = state.knownStatuts[r.id];
+        if(prev && prev !== r.statut){
+          const label = STATUS_LABELS[r.statut] || r.statut;
+          showToast(`Mise à jour : ${r.lieuDepart||''} → ${r.lieuArrivee||''} est maintenant « ${label} »`);
+          if(window.Notification && Notification.permission === 'granted'){
+            new Notification('Teranga Trans', {body:`Ta réservation est maintenant « ${label} »`});
+          }
+        }
+        state.knownStatuts[r.id] = r.statut;
+      });
+    }
+    state.reservations = next;
+    if(document.getElementById('panelHost')) renderPanel();
+  }, err=>console.error('Erreur écoute reservations:', err)));
+
+  if(role === 'admin'){
+    unsubs.push(db.collection('buses').onSnapshot(snap=>{
+      state.buses = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute buses:', err)));
+    unsubs.push(db.collection('users').onSnapshot(snap=>{
+      state.users = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      state.drivers = state.users.filter(u=>u.role==='chauffeur');
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute chauffeurs:', err)));
+  }
+
+  if(role === 'chauffeur'){
+    // Le parc de bus n'a rien de sensible (pas de donnees client) : le
+    // chauffeur peut le lire pour choisir un bus quand il propose un prix.
+    unsubs.push(db.collection('buses').onSnapshot(snap=>{
+      state.buses = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute buses:', err)));
+
+    // Marche des demandes ouvertes : accessible a TOUS les chauffeurs (pas
+    // seulement le chauffeur deja assigne), pour qu'ils puissent proposer
+    // un prix. On n'y montre volontairement pas le nom/telephone du client
+    // (voir chauffeurOffreCard) tant que l'offre n'est pas acceptee.
+    // ATTENTION : ceci demande d'ouvrir firestore.rules pour permettre a
+    // tout chauffeur authentifie de lire les reservations statut=='en_attente'.
+    unsubs.push(db.collection('reservations').where('statut','==','en_attente').onSnapshot(snap=>{
+      state.openRequests = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute demandes ouvertes:', err)));
+
+    // Ses propres offres envoyees (tous statuts, pour voir acceptees/refusees).
+    unsubs.push(db.collection('propositions').where('chauffeurId','==', uid).onSnapshot(snap=>{
+      state.myPropositions = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute mes propositions:', err)));
+
+    // Ses propres trajets publies (tous statuts : ouvert/reserve/annule).
+    unsubs.push(db.collection('trajetsProposes').where('chauffeurId','==', uid).onSnapshot(snap=>{
+      state.mesTrajetsProposes = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute mes trajets publiés:', err)));
+  }
+
+  if(role === 'client'){
+    // Offres recues par les chauffeurs sur les demandes de CE client
+    // uniquement (filtre par clientId, denormalise sur chaque proposition).
+    unsubs.push(db.collection('propositions').where('clientId','==', uid).onSnapshot(snap=>{
+      state.propositions = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute propositions reçues:', err)));
+
+    // Trajets publies par n'importe quel chauffeur, encore ouverts aux
+    // reservations : le client peut les parcourir/rechercher et reserver
+    // directement, sans avoir besoin de faire sa propre demande d'abord.
+    unsubs.push(db.collection('trajetsProposes').where('statut','==','ouvert').onSnapshot(snap=>{
+      state.trajetsProposes = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute trajets proposés:', err)));
+
+    // Historique de ses recharges de portefeuille (PayTech).
+    unsubs.push(db.collection('rechargements').where('clientId','==', uid).onSnapshot(snap=>{
+      state.rechargements = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      }).sort((a,b)=>b._ts-a._ts);
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute recharges:', err)));
+  }
+}
+
+/* ================= RETOUR PAYTECH (success_url / cancel_url) ================= */
+(function handlePaytechReturn(){
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('paytech');
+  if(status === 'success'){
+    setTimeout(()=>showToast("Paiement reçu ! Ton solde sera crédité dans quelques instants."), 500);
+  } else if(status === 'cancel'){
+    setTimeout(()=>showToast("Paiement annulé."), 500);
+  }
+  if(status){
+    params.delete('paytech');
+    const clean = window.location.pathname + (params.toString() ? '?'+params.toString() : '');
+    window.history.replaceState({}, '', clean);
+  }
+})();
+
+/* ================= AUTH STATE ================= */
+auth.onAuthStateChanged(async (user)=>{
+  if(!user){
+    state.user = null; state.profile = null; state.authLoading = false; clearListeners();
+    state.openRequests = []; state.propositions = []; state.myPropositions = []; state.proposingFor = null;
+    state.trajetsProposes = []; state.mesTrajetsProposes = []; state.clientTrajetSearch = ''; state.editingTrajet = null;
+    state.rechargements = [];
+    render();
+    return;
+  }
+  state.user = user;
+  const doc = await db.collection('users').doc(user.uid).get();
+  if(!doc.exists){
+    // Fallback: shouldn't happen normally
+    state.profile = {role:'client', status:'active', nom:user.email, email:user.email};
+  } else {
+    state.profile = doc.data();
+  }
+  state.activePanel = null;
+  state.authLoading = false;
+  attachListeners();
+  // Ecoute en direct de son propre profil (surtout utile pour le solde du
+  // portefeuille, credite/debite depuis les Cloud Functions PayTech).
+  unsubProfile = db.collection('users').doc(user.uid).onSnapshot(snap=>{
+    if(snap.exists){ state.profile = snap.data(); if(document.getElementById('root')) render(); }
+  }, err=>console.error('Erreur écoute profil:', err));
+  render();
+});
+
+
+/* ================= COUNTDOWN EN DIRECT ================= */
+// Met a jour l'affichage "Expire dans mm:ss" sans re-render complet,
+// pour tous les elements .countdown-timer presents a l'ecran (chauffeur
+// et admin).
+setInterval(()=>{
+  document.querySelectorAll('.countdown-timer[data-expires]').forEach(el=>{
+    const expires = Number(el.dataset.expires);
+    const diff = expires - Date.now();
+    if(diff<=0){
+      el.textContent = '⏳ Délai expiré — en cours de réattribution';
+      el.style.color = 'var(--red)';
+      el.style.background = '#FBE4DE';
+      return;
+    }
+    const m = Math.floor(diff/60000);
+    const s = Math.floor((diff%60000)/1000);
+    el.textContent = `⏳ Expire dans ${m}:${String(s).padStart(2,'0')}`;
+  });
+}, 1000);
+
+/* ================= EXPIRATION AUTO (cote admin) ================= */
+// Sans backend/Cloud Function, c'est la session admin ouverte qui verifie
+// periodiquement les trajets en attente_chauffeur perimes et les repasse
+// en_attente pour reassignation. Si aucun admin n'est connecte au moment
+// de l'expiration, ca sera rattrape a la prochaine ouverture d'une session
+// admin (le countdown cote chauffeur affichera deja "Délai expiré").
+setInterval(()=>{
+  if(!state.profile || state.profile.role !== 'admin') return;
+  const now = Date.now();
+  state.reservations.forEach(r=>{
+    if(r.statut==='attente_chauffeur' && r.expiresAt && r.expiresAt < now){
+      db.collection('reservations').doc(r.id).update({
+        statut:'en_attente',
+        busId:null, busImmat:null, busEquipements:null,
+        chauffeurId:null, chauffeurNom:null,
+        expiresAt:null
+      }).catch(e=>console.error('Erreur expiration auto', e));
+    }
+  });
+}, 20000);
+
+// Partage GPS automatique en arriere-plan (chauffeur en route / client attendu)
+setInterval(syncBackgroundSharing, 15000);
+
+render();
+</script>
+
+<!-- ================= GESTION DES MISES A JOUR (Service Worker) =================
+     Mise a jour 100% automatique et silencieuse : des qu'une nouvelle version
+     est deployee, elle s'active toute seule (voir skipWaiting dans sw.js) et
+     la page se recharge automatiquement, sans bandeau ni bouton a cliquer. -->
+<script>
+(function(){
+  if(!('serviceWorker' in navigator)) return;
+  // On sert un fichier statique, donc l'URL du SW doit etre relative a la racine du site.
+  navigator.serviceWorker.register('sw.js').then(function(reg){
+    // Verifie s'il existe une nouvelle version des l'ouverture de l'app.
+    reg.update().catch(function(){});
+  }).catch(function(err){ console.warn('Service worker non enregistre:', err); });
+
+  // Des qu'un nouveau SW prend le controle (activation automatique), on
+  // recharge une seule fois pour afficher la version fraiche.
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', function(){
+    if(refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+})();
+</script>
+</body>
+</html>
