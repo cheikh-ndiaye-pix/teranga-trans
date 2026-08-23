@@ -400,6 +400,24 @@ function genQrToken(){
 }
 if(window.QrScanner){ QrScanner.WORKER_PATH = 'https://cdnjs.cloudflare.com/ajax/libs/qr-scanner/1.4.2/qr-scanner-worker.min.js'; }
 
+/* =========================================================
+   📱 AUTH PAR TELEPHONE (OTP SMS) — variables de session, pas
+   dans `state` car ce sont des objets Firebase non-serialisables
+   (RecaptchaVerifier, ConfirmationResult), pas des donnees a
+   afficher directement dans le rendu.
+   ========================================================= */
+let phoneConfirmationResult = null;
+let recaptchaVerifier = null;
+const SENEGAL_DIAL_CODE = "+221";
+function toE164Senegal(raw){
+  // Nettoie un numero saisi localement (77 000 00 00, 770000000...)
+  // et le transforme en format international requis par Firebase.
+  let digits = String(raw||'').replace(/\D/g,'');
+  if(digits.startsWith('221')) digits = digits.slice(3);
+  digits = digits.replace(/^0+/, '');
+  return SENEGAL_DIAL_CODE + digits;
+}
+
 /* ---------- Helpers anti-XSS ---------- */
 function esc(str){
   if(str===undefined || str===null) return "";
@@ -467,6 +485,8 @@ let state = {
   authRole:"client",
   authMsg:null,
   showReset:false,
+  authMethod:"email",   // "email" ou "phone" — methode d'auth choisie sur l'ecran de connexion/inscription
+  phoneCodeSent:false,  // vrai une fois le SMS envoye, affiche le champ "code recu"
   reservations:[],
   buses:[],
   drivers:[],
@@ -554,6 +574,10 @@ function renderAuth(){
         <button data-tab="login" class="${isLogin?'active':''}">Connexion</button>
         <button data-tab="register" class="${!isLogin?'active':''}">Créer un compte</button>
       </div>
+      <button type="button" id="authMethodToggle" style="margin:10px 0 4px;background:transparent;border:none;color:var(--gold);font-size:13px;font-weight:600;text-decoration:underline;cursor:pointer;">
+        ${state.authMethod==='email' ? '📱 Utiliser mon numéro de téléphone' : '✉️ Utiliser mon email à la place'}
+      </button>
+      <div id="recaptcha-container"></div>
       <form id="authForm">
         ${!isLogin ? `
         <div class="field">
@@ -579,6 +603,7 @@ function renderAuth(){
         <p style="font-size:12px;color:var(--ink-soft);margin:-8px 0 14px;">Ton compte sera actif dès qu'un administrateur aura validé ton profil.</p>
         ` : ``}
         ` : ``}
+        ${state.authMethod==='email' ? `
         <div class="field">
           <label>Email</label>
           <input type="email" id="f-email" required>
@@ -588,8 +613,27 @@ function renderAuth(){
           <input type="password" id="f-pass" required minlength="6">
         </div>
         <button class="btn-primary" type="submit" id="authSubmit">${isLogin? 'Se connecter' : 'Créer mon compte'}</button>
+        ` : `
+        ${!state.phoneCodeSent ? `
+        ${isLogin ? `
+        <div class="field">
+          <label>Téléphone</label>
+          <input type="tel" id="f-tel-login" placeholder="77 000 00 00" required>
+        </div>
+        ` : ``}
+        <button class="btn-primary" type="submit" id="authSubmit">Envoyer le code par SMS</button>
+        ` : `
+        <p style="font-size:12.5px;color:var(--ink-soft);margin:-4px 0 12px;">Code envoyé par SMS. Entre-le ci-dessous.</p>
+        <div class="field">
+          <label>Code reçu par SMS</label>
+          <input type="text" inputmode="numeric" id="f-otp-code" placeholder="123456" required>
+        </div>
+        <button class="btn-primary" type="submit" id="authSubmit">Vérifier le code</button>
+        <button type="button" id="phoneCancelBtn" style="margin-top:10px;background:transparent;border:none;color:var(--ink-soft);font-size:13px;text-decoration:underline;cursor:pointer;">Recommencer</button>
+        `}
+        `}
       </form>
-      ${isLogin ? `<button type="button" id="forgotPassBtn" style="margin-top:12px;background:transparent;border:none;color:var(--ink-soft);font-size:13px;text-decoration:underline;cursor:pointer;">Mot de passe oublié ?</button>` : ``}
+      ${isLogin && state.authMethod==='email' ? `<button type="button" id="forgotPassBtn" style="margin-top:12px;background:transparent;border:none;color:var(--ink-soft);font-size:13px;text-decoration:underline;cursor:pointer;">Mot de passe oublié ?</button>` : ``}
       ${state.authMsg ? `<div class="auth-msg ${state.authMsg.type}">${esc(state.authMsg.text)}</div>` : ``}
       `}
       </div>
@@ -599,11 +643,26 @@ function renderAuth(){
 
 function bindAuthEvents(){
   document.querySelectorAll('[data-tab]').forEach(b=>{
-    b.onclick = ()=>{ state.authTab = b.dataset.tab; state.authMsg=null; render(); };
+    b.onclick = ()=>{ state.authTab = b.dataset.tab; state.authMsg=null; state.phoneCodeSent=false; phoneConfirmationResult=null; render(); };
   });
   document.querySelectorAll('input[name="role"]').forEach(r=>{
     r.onchange = ()=>{ state.authRole = r.value; render(); };
   });
+
+  const methodToggle = document.getElementById('authMethodToggle');
+  if(methodToggle){
+    methodToggle.onclick = ()=>{
+      state.authMethod = state.authMethod==='email' ? 'phone' : 'email';
+      state.authMsg = null;
+      state.phoneCodeSent = false;
+      phoneConfirmationResult = null;
+      render();
+    };
+  }
+  const phoneCancelBtn = document.getElementById('phoneCancelBtn');
+  if(phoneCancelBtn){
+    phoneCancelBtn.onclick = ()=>{ state.phoneCodeSent = false; phoneConfirmationResult = null; state.authMsg = null; render(); };
+  }
 
   const forgotBtn = document.getElementById('forgotPassBtn');
   if(forgotBtn){
@@ -635,59 +694,110 @@ function bindAuthEvents(){
 
   const form = document.getElementById('authForm');
   if(!form) return;
+
+  function showAuthError(err){
+    console.error('Erreur inscription/connexion Teranga Trans:', err);
+    state.authMsg = {type:'error', text: friendlyAuthError(err)};
+    let msgEl = document.querySelector('.auth-msg');
+    if(!msgEl){
+      msgEl = document.createElement('div');
+      form.insertAdjacentElement('afterend', msgEl);
+    }
+    msgEl.className = 'auth-msg ' + state.authMsg.type;
+    msgEl.textContent = state.authMsg.text;
+  }
+
+  /* ---- Creation du profil Firestore commune email/telephone ---- */
+  async function createProfileForNewUser(uid, {nom, tel, email}){
+    const permisEl = document.getElementById('f-permis');
+    const permis = permisEl ? permisEl.value.trim() : '';
+    const isAdmin = email && ADMIN_EMAILS.map(a=>a.toLowerCase()).includes(email.toLowerCase());
+    const finalRole = isAdmin ? 'admin' : state.authRole;
+    const finalStatus = finalRole === 'chauffeur' ? 'pending' : 'active';
+    const profile = {
+      nom, telephone: tel, email: email || null, role: finalRole,
+      status: finalStatus,
+      numeroPermis: finalRole==='chauffeur' ? permis : null,
+      solde: finalRole==='client' ? 0 : null,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    try{
+      await db.collection('users').doc(uid).set(profile);
+    }catch(writeErr){
+      await auth.currentUser.delete().catch(()=>{});
+      throw writeErr;
+    }
+  }
+
   form.onsubmit = async (e)=>{
     e.preventDefault();
-    const email = document.getElementById('f-email').value.trim();
-    const pass = document.getElementById('f-pass').value;
     const submitBtn = document.getElementById('authSubmit');
     submitBtn.disabled = true;
     state.authMsg = null;
+
+    /* ================= AUTH PAR TELEPHONE (OTP) ================= */
+    if(state.authMethod === 'phone'){
+      try{
+        if(!state.phoneCodeSent){
+          // Etape 1 : on envoie le SMS. En register, le numero vient du
+          // champ "Téléphone" du formulaire d'inscription (f-tel) ; en
+          // login, du champ dedie (f-tel-login).
+          const rawPhone = state.authTab==='login'
+            ? document.getElementById('f-tel-login').value.trim()
+            : document.getElementById('f-tel').value.trim();
+          const phoneE164 = toE164Senegal(rawPhone);
+          if(!recaptchaVerifier){
+            recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {size:'invisible'}, auth);
+          }
+          phoneConfirmationResult = await auth.signInWithPhoneNumber(phoneE164, recaptchaVerifier);
+          state.phoneCodeSent = true;
+          state.authMsg = {type:'success', text:"Code envoyé par SMS."};
+          submitBtn.disabled = false;
+          render();
+          return;
+        } else {
+          // Etape 2 : verification du code recu.
+          const code = document.getElementById('f-otp-code').value.trim();
+          if(!phoneConfirmationResult){ throw new Error("Session expirée, recommence."); }
+          const result = await phoneConfirmationResult.confirm(code);
+          const user = result.user;
+          if(state.authTab === 'register'){
+            const nom = document.getElementById('f-nom').value.trim();
+            const tel = document.getElementById('f-tel').value.trim();
+            await createProfileForNewUser(user.uid, {nom, tel, email:null});
+          } else {
+            // Connexion : on verifie qu'un profil existe deja pour ce numero.
+            const snap = await db.collection('users').doc(user.uid).get();
+            if(!snap.exists){
+              await auth.signOut();
+              throw new Error("Aucun compte trouvé avec ce numéro. Crée un compte d'abord.");
+            }
+          }
+          state.phoneCodeSent = false;
+          phoneConfirmationResult = null;
+        }
+      }catch(err){
+        showAuthError(err);
+        submitBtn.disabled = false;
+      }
+      return;
+    }
+
+    /* ================= AUTH PAR EMAIL / MOT DE PASSE ================= */
+    const email = document.getElementById('f-email').value.trim();
+    const pass = document.getElementById('f-pass').value;
     try{
       if(state.authTab === 'login'){
         await auth.signInWithEmailAndPassword(email, pass);
       } else {
         const nom = document.getElementById('f-nom').value.trim();
         const tel = document.getElementById('f-tel').value.trim();
-        const permisEl = document.getElementById('f-permis');
-        const permis = permisEl ? permisEl.value.trim() : '';
         const cred = await auth.createUserWithEmailAndPassword(email, pass);
-        // Le rôle admin n'est jamais un choix de formulaire : il est déterminé
-        // automatiquement si l'email fait partie de ADMIN_EMAILS (comme
-        // ADMIN_UID dans TataPay). Tout le monde d'autre suit le choix
-        // Client / Chauffeur normal.
-        const isAdmin = ADMIN_EMAILS.map(a=>a.toLowerCase()).includes(email.toLowerCase());
-        const finalRole = isAdmin ? 'admin' : state.authRole;
-        // Inscription libre pour client/admin (actif immediatement).
-        // Un chauffeur doit d'abord etre valide par un admin : son compte
-        // est cree avec status 'pending' (voir firestore.rules assortie).
-        const finalStatus = finalRole === 'chauffeur' ? 'pending' : 'active';
-        const profile = {
-          nom, telephone: tel, email, role: finalRole,
-          status: finalStatus,
-          numeroPermis: finalRole==='chauffeur' ? permis : null,
-          solde: finalRole==='client' ? 0 : null, // portefeuille PayTech, uniquement pour les clients
-          createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
-        try{
-          await db.collection('users').doc(cred.user.uid).set(profile);
-        }catch(writeErr){
-          // Le compte Auth a été créé mais le profil a été refusé.
-          // On nettoie pour éviter un compte orphelin.
-          await cred.user.delete().catch(()=>{});
-          throw writeErr;
-        }
+        await createProfileForNewUser(cred.user.uid, {nom, tel, email});
       }
     }catch(err){
-      console.error('Erreur inscription/connexion Teranga Trans:', err);
-      state.authMsg = {type:'error', text: friendlyAuthError(err)};
+      showAuthError(err);
       submitBtn.disabled = false;
-      let msgEl = document.querySelector('.auth-msg');
-      if(!msgEl){
-        msgEl = document.createElement('div');
-        form.insertAdjacentElement('afterend', msgEl);
-      }
-      msgEl.className = 'auth-msg ' + state.authMsg.type;
-      msgEl.textContent = state.authMsg.text;
     }
   };
 }
@@ -701,6 +811,12 @@ function friendlyAuthError(err){
     'auth/user-not-found':"Compte introuvable.",
     'auth/wrong-password':"Mot de passe incorrect.",
     'auth/invalid-credential':"Email ou mot de passe incorrect.",
+    'auth/invalid-phone-number':"Numéro de téléphone invalide. Vérifie le format (ex: 77 000 00 00).",
+    'auth/missing-phone-number':"Merci de renseigner ton numéro de téléphone.",
+    'auth/invalid-verification-code':"Code incorrect. Vérifie le SMS reçu.",
+    'auth/code-expired':"Le code a expiré. Redemande un nouveau code.",
+    'auth/too-many-requests':"Trop de tentatives. Réessaie dans quelques minutes.",
+    'auth/quota-exceeded':"Limite de SMS atteinte pour aujourd'hui. Réessaie plus tard.",
     'auth/unauthorized-domain':"Ce domaine n'est pas autorisé dans Firebase Authentication (Paramètres > Domaines autorisés).",
     'auth/network-request-failed':"Problème de connexion internet. Vérifie ta connexion et réessaie.",
     'permission-denied':"Accès refusé par les règles Firestore. Vérifie ton email dans ADMIN_EMAILS si tu essaies de créer le compte admin."
@@ -2548,4 +2664,3 @@ render();
 </script>
 </body>
 </html>
-  
