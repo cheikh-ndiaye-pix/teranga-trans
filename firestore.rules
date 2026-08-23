@@ -63,17 +63,35 @@ service cloud.firestore {
                      isAdmin()
                    );
 
-      // Un client actif ne peut creer qu'une demande "propre" :
-      // en_attente, sans bus/chauffeur/prix pre-remplis (ca, c'est le
-      // travail de l'admin lors de la confirmation).
-      allow create: if isActiveClient()
-                    && request.resource.data.clientId == request.auth.uid
-                    && request.resource.data.statut == 'en_attente'
-                    && request.resource.data.busId == null
-                    && request.resource.data.chauffeurId == null
-                    && request.resource.data.busImmat == null
-                    && request.resource.data.chauffeurNom == null
-                    && request.resource.data.prix == null;
+      allow create: if
+                    // Cas normal : un client actif cree une demande "propre",
+                    // en_attente, sans bus/chauffeur/prix pre-remplis (ca,
+                    // c'est le travail de l'admin lors de la confirmation,
+                    // ou d'un chauffeur qui propose ensuite un prix).
+                    (
+                      isActiveClient()
+                      && request.resource.data.clientId == request.auth.uid
+                      && request.resource.data.statut == 'en_attente'
+                      && request.resource.data.busId == null
+                      && request.resource.data.chauffeurId == null
+                      && request.resource.data.busImmat == null
+                      && request.resource.data.chauffeurNom == null
+                      && request.resource.data.prix == null
+                    )
+                    ||
+                    // Cas "trajet publie par un chauffeur" : le client
+                    // reserve directement un trajet deja propose (voir
+                    // trajetsProposes plus bas), la reservation est creee
+                    // deja confirmee avec chauffeur/bus/prix pre-remplis.
+                    (
+                      isActiveClient()
+                      && request.resource.data.clientId == request.auth.uid
+                      && request.resource.data.statut == 'confirmee'
+                      && request.resource.data.chauffeurId != null
+                      && request.resource.data.prix is number
+                      && request.resource.data.prix > 0
+                      && request.resource.data.paiementStatut == 'non_paye'
+                    );
 
       allow update: if isAdmin() || (
                       isActiveDriver() &&
@@ -99,6 +117,119 @@ service cloud.firestore {
                       request.resource.data.statut == 'terminee' &&
                       (!('note' in resource.data) || resource.data.note == null) &&
                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['note', 'avis'])
+                    ) || (
+                      // Le client accepte l'offre d'un chauffeur sur sa propre
+                      // demande (marche des propositions) : en_attente -> confirmee,
+                      // avec chauffeur/bus/prix fixes par l'offre choisie.
+                      isActiveClient() &&
+                      resource.data.clientId == request.auth.uid &&
+                      resource.data.statut == 'en_attente' &&
+                      request.resource.data.statut == 'confirmee' &&
+                      request.resource.data.chauffeurId != null &&
+                      request.resource.data.prix is number &&
+                      request.resource.data.prix > 0 &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                        'statut', 'chauffeurId', 'chauffeurNom', 'chauffeurTelephone',
+                        'busId', 'busImmat', 'busEquipements',
+                        'prix', 'commission', 'montantChauffeur', 'paiementStatut'
+                      ])
+                    );
+
+      allow delete: if isAdmin();
+    }
+
+    // --- rechargements (historique des recharges de portefeuille PayTech) ---
+    // Toutes les ecritures passent exclusivement par les Cloud Functions
+    // (Admin SDK, qui contourne ces regles) : createPaytechPayment cree la
+    // demande, paytechIPN la valide/echoue apres reponse de PayTech. Aucune
+    // ecriture cote client n'est autorisee, pour eviter qu'un client ne
+    // s'auto-credite en creant/modifiant un document directement.
+    match /rechargements/{rechId} {
+      allow read: if isSignedIn() && (resource.data.clientId == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // --- propositions (un chauffeur propose un prix sur une demande client) ---
+    match /propositions/{propId} {
+      allow read: if isSignedIn() && (
+                     resource.data.chauffeurId == request.auth.uid ||
+                     resource.data.clientId == request.auth.uid ||
+                     isAdmin()
+                   );
+
+      // Un chauffeur actif ne peut proposer que sur une demande client
+      // encore ouverte (en_attente), et le clientId denormalise doit
+      // correspondre au vrai proprietaire de la demande.
+      allow create: if isActiveDriver()
+                    && request.resource.data.chauffeurId == request.auth.uid
+                    && request.resource.data.statut == 'en_attente'
+                    && request.resource.data.prixPropose is number
+                    && request.resource.data.prixPropose > 0
+                    && get(/databases/$(database)/documents/reservations/$(request.resource.data.reservationId)).data.statut == 'en_attente'
+                    && get(/databases/$(database)/documents/reservations/$(request.resource.data.reservationId)).data.clientId == request.resource.data.clientId;
+
+      // Le client concerne accepte ou refuse une offre recue.
+      allow update: if isAdmin() || (
+                      isActiveClient() &&
+                      resource.data.clientId == request.auth.uid &&
+                      resource.data.statut == 'en_attente' &&
+                      request.resource.data.statut in ['acceptee', 'refusee'] &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statut'])
+                    );
+
+      // Le chauffeur peut retirer sa propre offre tant qu'elle est en attente.
+      allow delete: if isAdmin() || (
+                      isActiveDriver() &&
+                      resource.data.chauffeurId == request.auth.uid &&
+                      resource.data.statut == 'en_attente'
+                    );
+    }
+
+    // --- trajetsProposes (un chauffeur publie un trajet a l'avance) ---
+    match /trajetsProposes/{trajetId} {
+      // Lecture ouverte a tout utilisateur connecte : les clients doivent
+      // pouvoir parcourir/rechercher tous les trajets ouverts.
+      allow read: if isSignedIn();
+
+      allow create: if isActiveDriver()
+                    && request.resource.data.chauffeurId == request.auth.uid
+                    && request.resource.data.statut == 'ouvert'
+                    && request.resource.data.prixPropose is number
+                    && request.resource.data.prixPropose > 0
+                    && request.resource.data.placesDisponibles is number
+                    && request.resource.data.placesDisponibles > 0;
+
+      allow update: if isAdmin() || (
+                      // Le chauffeur proprietaire retire son trajet.
+                      isActiveDriver() &&
+                      resource.data.chauffeurId == request.auth.uid &&
+                      resource.data.statut == 'ouvert' &&
+                      request.resource.data.statut == 'annule' &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statut'])
+                    ) || (
+                      // Le chauffeur proprietaire modifie les details de son
+                      // trajet (prix, date, places, bus...) tant qu'il est
+                      // encore ouvert (pas deja reserve par un client).
+                      isActiveDriver() &&
+                      resource.data.chauffeurId == request.auth.uid &&
+                      resource.data.statut == 'ouvert' &&
+                      request.resource.data.statut == 'ouvert' &&
+                      request.resource.data.chauffeurId == resource.data.chauffeurId &&
+                      request.resource.data.prixPropose is number &&
+                      request.resource.data.prixPropose > 0 &&
+                      request.resource.data.placesDisponibles is number &&
+                      request.resource.data.placesDisponibles > 0 &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                        'lieuDepart', 'lieuArrivee', 'dateEvenement', 'placesDisponibles',
+                        'prixPropose', 'commission', 'prixTotal',
+                        'busId', 'busImmat', 'busEquipements', 'message'
+                      ])
+                    ) || (
+                      // Un client actif reserve un trajet encore ouvert.
+                      isActiveClient() &&
+                      resource.data.statut == 'ouvert' &&
+                      request.resource.data.statut == 'reserve' &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statut'])
                     );
 
       allow delete: if isAdmin();
