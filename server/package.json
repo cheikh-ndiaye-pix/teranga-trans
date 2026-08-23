@@ -1,13 +1,15 @@
 {
-  "type": "service_account",
-  "project_id": "teranga-trans",
-  "private_key_id": "c51e622313542e9a301b45848ed5e62b7803f340",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCrEXGXFZydHabU\nTu/4n83unKcFdrdfrbkZSyLbB4vnJBqxtUGWNA5EpCgwMGiC2Ap0KwBiBw1cISFM\nwNUv75EvfLmBHUKJsUL3JTtpTIYYzAPBr2PouHUZkh190UVZx+diB7aY9r4O2oBK\nmRcVxtWUO3xfigL5ofFQvs0DmoE+C8wFYvkpAZRSsJ7iyYhU0rYCxU5AYr87sQEF\nx7faEroOGgNz11riP6RDYf4RIuWP9lT16Q/rpmUEw6uxjdqg0vA2NcOJBe0ZPmZb\nlfNKjaKmvlgR3lgeDStxh56z7MCNVxR3SCmAf8HudIIghsKCpEk/EFQi/SWJFccl\nOBTE51DVAgMBAAECggEAAUr3GeXJZi+cBUn2ycx9cZwkDO988RjAPGWq+IrbJ5/Y\nvmFEPKh+otoqfSK+dOA9O7pb2vZyS1Y1iP28WIev71YRpkA3U62FqYWHeuY+oyG5\npUjjiBXhb0GmmRWpzDBbBbHM+HGNtcUXjQ1rx9Ksi3JPIFG3Rr/z64HpxO1EYpaM\nSdStXuzc22+W+gu9Bm+LThg/bau4cFRRX2CHLCf4rSj/EZGgM8i0onh6K/KV0qvO\nzLGYtRAiYvAuZYunjcWaHunsjObPFdeZR4FIJGK0rBI8A7PrsOe/BzObkiuiNgzZ\nGGCNgGKjBIgOTlefNO8GieCVNZ3peW+6sibKOLdEAQKBgQDisF85RskxwCUOJfEi\nz5AfFpCW2CSSyO7+n5TdJpeosIoO6bxy7JXPGT4WN/SEGHn1bvi6627vPyRR0GIT\nlz+yI5oMbNlKCNvZE+dHm/pk3RUv+AOR3PRKA9lmXZL3bHR9zNYOZ0jGSilsrKsO\nRFHV4laCtkiup8IvFNIdpdHHgQKBgQDBL/fKbS/tcGajRDqMWIPh3zLUKRdeV45o\n7iLuSeG+lPP54gOU9yldvltlPpislI38oRxs5xr3d+6gLnmKNcMMyXTgf+k3pv2I\ncPEcuzVsxXUXj28cul5gHx8QouzHfb2mI4qlEVcane+mEeyCoxMhw42jq5Va5+hA\nF13ekTGTVQKBgQC6cbGAHFYyEwTnJBG2Pd0dlKOLTW6XQ6g9x+baFXm7BqgmJ9wU\n8b0tPmewQolbc/4q/QCaTDVLlTU8DRX9YvLCg0GaYpQ8rhiT7CjW3tUMzEE22Nem\nyoIptgzCgsfztEIDjcuowQ47+JcliMaPz2U3cxcQHvicneG6c3d1ZwKpAQKBgH40\nlg56MjtNmN/ELPOOx+mBZLVReuC5FmHaYJuHTKCysohmbKyeozmIqDCGKjtkeTW3\nEtjaSbWtdgjTE7eE073Axkf7iCJBR5QhJIL+kjJS9OHFZHNCFXF6I1M8/K5+qKym\nv2aC44KR9wNo5jeZzV/bXuazq0jOA94K5doGxHpZAoGAR18nv2+Ume3UK73/3QVs\nmOKiQ9wnZtveJZEhYMdrg+ciYRZIUgOHFOMd8XMeRkT5PQ8orqOI4+gp9KOFjH2W\n3aepwJDG3WCAupqhQpfIqqjl5U1/KNOOyqjO0bWsFc4YKU+LN0z9n/KipUsZPCTc\nE572qpPSF2lYqM6Jm4BHCSE=\n-----END PRIVATE KEY-----\n",
-  "client_email": "firebase-adminsdk-fbsvc@teranga-trans.iam.gserviceaccount.com",
-  "client_id": "108167437434806427358",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40teranga-trans.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
+  "name": "teranga-trans-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.7.0",
+    "firebase-admin": "^12.0.0",
+    "dotenv": "^16.4.5"
+  }
 }
