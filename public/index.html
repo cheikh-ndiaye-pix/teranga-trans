@@ -1841,7 +1841,7 @@ function bindPanelEvents(){
         await db.runTransaction(async (tx)=>{
           const resRef = db.collection('reservations').doc(prop.reservationId);
           const resSnap = await tx.get(resRef);
-          if(!resSnap.exists()) throw new Error("Réservation introuvable.");
+          if(!resSnap.exists) throw new Error("Réservation introuvable.");
           const resData = resSnap.data();
           if(resData.statut !== 'en_attente') throw new Error("Cette demande n'est plus disponible.");
           const conflict = findBookingConflict(resData.dateEvenement, prop.busId, prop.chauffeurId, prop.reservationId);
@@ -2022,7 +2022,7 @@ function bindPanelEvents(){
         await db.runTransaction(async (tx)=>{
           const trajetRef = db.collection('trajetsProposes').doc(trajetId);
           const trajetSnap = await tx.get(trajetRef);
-          if(!trajetSnap.exists()) throw new Error("Ce trajet n'est plus disponible.");
+          if(!trajetSnap.exists) throw new Error("Ce trajet n'est plus disponible.");
           const tData = trajetSnap.data();
           if(tData.statut !== 'ouvert') throw new Error("Ce trajet vient d'être réservé par quelqu'un d'autre.");
           const conflict = findBookingConflict(tData.dateEvenement, tData.busId, tData.chauffeurId, null);
