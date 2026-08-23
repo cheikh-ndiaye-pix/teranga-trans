@@ -301,6 +301,24 @@ const db = firebase.firestore();
 // Region europe-west1 : doit correspondre a setGlobalOptions() dans functions/index.js
 const cloudFunctions = firebase.app().functions('europe-west1');
 
+// URL du serveur Render qui remplace les anciennes Cloud Functions Firebase
+const SERVER_BASE_URL = "https://teranga-trans.onrender.com";
+
+async function callServer(endpoint, body){
+  const token = await auth.currentUser.getIdToken();
+  const res = await fetch(`${SERVER_BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error || "Erreur serveur");
+  return data;
+}
+
 /* =========================================================
    ⚠️ ADMIN — LISTE SOURCE UNIQUE (à synchroniser MANUELLEMENT) ⚠️
 
@@ -1936,10 +1954,13 @@ function bindPanelEvents(){
     const btn = document.getElementById('rechargeSubmitBtn');
     btn.disabled = true; btn.textContent = 'Redirection vers PayTech...';
     try{
-      const createPaytechPayment = cloudFunctions.httpsCallable('createPaytechPayment');
-      const res = await createPaytechPayment({amount});
-      if(res.data && res.data.redirect_url){
-        window.location.href = res.data.redirect_url;
+      const res = await callServer('/api/create-payment', {
+        amount,
+        itemName: "Recharge Teranga Trans",
+        ref_command: `RECHARGE-${state.user.uid}-${Date.now()}`
+      });
+      if(res && res.redirect_url){
+        window.location.href = res.redirect_url;
       } else {
         throw new Error("Réponse PayTech invalide.");
       }
@@ -1954,8 +1975,7 @@ function bindPanelEvents(){
       if(!confirm("Payer cette offre directement avec ton solde ?")) return;
       b.disabled = true; b.textContent = 'Paiement en cours...';
       try{
-        const payFn = cloudFunctions.httpsCallable('payReservationFromWallet');
-        await payFn({type:'proposition', id: b.dataset.payPropositionWallet});
+        await callServer('/api/pay-from-wallet', {type:'proposition', id: b.dataset.payPropositionWallet});
         showToast("Payé avec ton solde ! Réservation confirmée.");
       }catch(err){
         showToast("Erreur : " + (err.message || "paiement impossible."));
@@ -1976,8 +1996,7 @@ function bindPanelEvents(){
       if(!confirm(`Payer ce trajet directement avec ton solde (${Number(trajet.prixTotal||0).toLocaleString('fr-FR')} FCFA) ?`)) return;
       b.disabled = true; b.textContent = 'Paiement en cours...';
       try{
-        const payFn = cloudFunctions.httpsCallable('payReservationFromWallet');
-        await payFn({type:'trajet', id: trajetId, passagers});
+        await callServer('/api/pay-from-wallet', {type:'trajet', id: trajetId, passagers});
         showToast("Payé avec ton solde ! Réservation confirmée.");
       }catch(err){
         showToast("Erreur : " + (err.message || "paiement impossible."));
