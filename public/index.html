@@ -1775,12 +1775,13 @@ function ticketCard(r, mode){
       <div style="font-size:12.5px;color:var(--ink-soft);">${esc(r.typeEvenement)} • ${dateFmt}</div>
       <div class="meta-row">
         <span><b>${esc(r.nbPassagers)}</b> passagers</span>
-        <span>Contact: <b>${esc(r.clientTelephone||'—')}</b></span>
+        ${mode.startsWith('admin') ? `<span>Contact client: <b>${esc(r.clientTelephone||'—')}</b></span>` : ``}
         ${mode!=='client' ? `<span>Client: <b>${esc(r.clientNom)}</b></span>` : ``}
         ${r.busImmat ? `<span>Bus: <b class="mono">${esc(r.busImmat)}</b></span>` : ``}
         ${r.chauffeurNom ? `<span>Chauffeur: <b>${esc(r.chauffeurNom)}</b></span>` : ``}
         ${r.chauffeurNom && mode.startsWith('admin') ? `<span>Tél. chauffeur: <b>${esc(r.chauffeurTelephone||'—')}</b></span>` : ``}
         ${r.chauffeurNom && mode==='client' ? `<span>Contact chauffeur (service Teranga): <b>${esc(TERANGA_SERVICE_PHONE)}</b></span>` : ``}
+        ${mode==='chauffeur' ? `<span>Contact client (service Teranga): <b>${esc(TERANGA_SERVICE_PHONE)}</b></span>` : ``}
         ${r.prix ? `<span>Prix: <b>${esc(r.prix)} FCFA</b></span>` : ``}
       </div>
       ${r.prix && mode==='admin' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Commission Teranga: <b>${esc(r.commission||0)} FCFA</b> • Part chauffeur/propriétaire: <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
