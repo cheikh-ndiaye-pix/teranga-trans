@@ -278,6 +278,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-functions-compat.js"></script>
+<!-- Generation du QR code sur le billet client -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- Scan du QR via la camera du chauffeur (embarquement) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qr-scanner/1.4.2/qr-scanner.umd.min.js"></script>
 
 <script>
 /* =========================================================
@@ -353,13 +357,21 @@ const COMMISSION_RATE = 0.12;
 // Delai laisse au chauffeur pour accepter/refuser un trajet assigne par
 // l'admin avant que la reservation reparte automatiquement en attente.
 const DRIVER_ACCEPT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
-// Commission fixe ajoutee par l'application sur chaque prix propose par
+// Commission ajoutee par l'application sur chaque prix propose par
 // un chauffeur dans le "marche" des demandes clients (voir plus bas).
 // Contrairement a COMMISSION_RATE (pourcentage retire du prix fixe par
 // l'admin), ici la commission s'AJOUTE au prix que le chauffeur veut
-// recevoir : le client paie prixPropose + 500, le chauffeur touche
+// recevoir : le client paie prixPropose + commission, le chauffeur touche
 // integralement le prix qu'il a propose.
-const PROPOSITION_COMMISSION_FCFA = 500;
+// Modele hybride : on prend le plus grand entre un plancher fixe (protege
+// les petites courses) et un pourcentage (capte plus de valeur sur les
+// grosses reservations, ex: bus complet pour evenement).
+const PROPOSITION_COMMISSION_MIN_FCFA = 500;
+const PROPOSITION_COMMISSION_RATE = 0.05; // 5%
+function calcPropositionCommission(prixPropose){
+  const p = Number(prixPropose)||0;
+  return Math.max(PROPOSITION_COMMISSION_MIN_FCFA, Math.round(p * PROPOSITION_COMMISSION_RATE));
+}
 // Numero de contact officiel de Teranga Trans, affiche au CLIENT une fois
 // un chauffeur assigne/confirme (a la place du numero prive du chauffeur,
 // que seul l'admin doit voir).
@@ -369,6 +381,24 @@ function calcSplit(prix){
   const commission = Math.round(p * COMMISSION_RATE);
   return { commission, montantChauffeur: p - commission };
 }
+
+/* =========================================================
+   🎫 BILLET QR — embarquement
+   Chaque reservation confirmee recoit un token unique et
+   impredictible (qrToken). Le QR du billet client encode
+   {resId, token}. Le chauffeur scanne ce QR depuis sa fiche
+   de reservation pour verifier resId+token contre Firestore
+   et marquer l'embarquement. Un scan deja valide est bloque
+   (anti-fraude : pas de re-utilisation du meme billet).
+   ========================================================= */
+function genQrToken(){
+  // 24 caracteres aleatoires (base36) — suffisant pour un token
+  // a usage interne, non devinable, pas besoin de crypto lourde ici.
+  let t = '';
+  for(let i=0;i<3;i++) t += Math.random().toString(36).slice(2,10);
+  return t;
+}
+if(window.QrScanner){ QrScanner.WORKER_PATH = 'https://cdnjs.cloudflare.com/ajax/libs/qr-scanner/1.4.2/qr-scanner-worker.min.js'; }
 
 /* ---------- Helpers anti-XSS ---------- */
 function esc(str){
@@ -1190,7 +1220,7 @@ function renderChauffeurProposer(){
         <label>Message (optionnel)</label>
         <input type="text" id="tp-msg" placeholder="Ex: départ 7h précises, climatisé...">
       </div>
-      <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ ${PROPOSITION_COMMISSION_FCFA} FCFA de commission Teranga Trans ajoutée automatiquement au prix affiché au client.</div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
       <button class="btn-primary" type="submit" style="width:auto;padding:11px 20px;">Publier ce trajet</button>
     </form>
   </div>
@@ -1231,7 +1261,7 @@ function trajetProposeCard(t){
             <label>Message (optionnel)</label>
             <input type="text" id="tpe-msg-${t.id}" value="${esc(t.message||'')}">
           </div>
-          <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ ${PROPOSITION_COMMISSION_FCFA} FCFA de commission Teranga Trans ajoutée automatiquement au prix affiché au client.</div>
+          <div style="font-size:11.5px;color:var(--ink-soft);margin:10px 0;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
           <div class="btn-row">
             <button class="btn-sm btn-confirm" type="submit">Enregistrer les modifications</button>
             <button class="btn-sm btn-ghost" type="button" data-cancel-edit-trajet="${t.id}">Annuler</button>
@@ -1387,7 +1417,7 @@ function chauffeurOffreCard(r){
         <label>Message (optionnel)</label>
         <input type="text" id="propMsg-${r.id}" placeholder="Ex: dispo dès 8h, bus climatisé...">
       </div>
-      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;">+ ${PROPOSITION_COMMISSION_FCFA} FCFA de commission Teranga Trans ajoutée automatiquement au prix affiché au client.</div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
       <div class="btn-row">
         <button class="btn-sm btn-confirm" data-submit-proposition="${r.id}">Envoyer mon offre</button>
         <button class="btn-sm btn-ghost" data-cancel-propose-form="${r.id}">Annuler</button>
@@ -1526,6 +1556,16 @@ function ticketCard(r, mode){
   if(mode==='chauffeur' && st==='en_route'){
     actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-finish-trip="${r.id}">Marquer terminé</button></div>`;
   }
+  if(mode==='chauffeur' && (st==='confirmee' || st==='en_route') && r.qrToken){
+    actions += r.embarquementValide
+      ? `<div style="margin-top:8px;font-size:12.5px;color:var(--gold);font-weight:700;">✅ Billet vérifié — passager embarqué</div>`
+      : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-night" data-scan-qr="${r.id}" data-scan-token="${esc(r.qrToken)}">📷 Scanner le billet du client</button></div>`;
+  }
+  if(mode==='client' && (st==='confirmee' || st==='en_route') && r.qrToken){
+    actions += r.embarquementValide
+      ? `<div style="margin-top:8px;font-size:12.5px;color:var(--gold);font-weight:700;">✅ Embarquement validé</div>`
+      : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-confirm" data-show-qr="${r.id}" data-qr-token="${esc(r.qrToken)}">🎫 Voir mon billet QR</button></div>`;
+  }
   if(mode==='client' && (st==='en_attente' || st==='confirmee')){
     actions = `<div class="btn-row"><button class="btn-sm btn-ghost" data-cancel-res="${r.id}">Annuler la réservation</button></div>`;
   }
@@ -1585,6 +1625,7 @@ function ticketCard(r, mode){
         ${mode==='client' && r.paiementStatut!=='paye' && r.lienPaiement ? `<a href="${esc(r.lienPaiement)}" target="_blank" rel="noopener" class="btn-sm btn-confirm" style="text-decoration:none;">Payer maintenant</a>` : ``}
       </div>` : ``}
       ${r.note ? `<div style="margin-top:8px;font-size:13px;color:var(--gold);">${'★'.repeat(r.note)}${'☆'.repeat(5-r.note)} ${r.avis?`<span style="color:var(--ink-soft);font-style:italic;">— "${esc(r.avis)}"</span>`:``}</div>` : ``}
+      ${r.embarquementValide && mode.startsWith('admin') ? `<div style="margin-top:4px;font-size:12px;color:var(--gold);font-weight:700;">✅ Passager embarqué (billet scanné)</div>` : ``}
       ${st==='attente_chauffeur' && r.expiresAt ? `<div class="countdown-timer" data-expires="${r.expiresAt}">⏳ …</div>` : ``}
       ${actions}
     </div>
@@ -1758,7 +1799,7 @@ function bindPanelEvents(){
     b.onclick = async ()=>{
       const id = b.dataset.acceptTrajet;
       try{
-        await db.collection('reservations').doc(id).update({statut:'confirmee', expiresAt:null});
+        await db.collection('reservations').doc(id).update({statut:'confirmee', expiresAt:null, qrToken: genQrToken()});
         showToast("Trajet accepté ! Bonne route en préparation.");
       }catch(e){ showToast("Erreur : " + e.message); }
     };
@@ -1808,8 +1849,8 @@ function bindPanelEvents(){
           busImmat: bus ? bus.immatriculation : null,
           busEquipements: bus ? (bus.equipements || []) : null,
           prixPropose,
-          commission: PROPOSITION_COMMISSION_FCFA,
-          prixTotal: prixPropose + PROPOSITION_COMMISSION_FCFA,
+          commission: calcPropositionCommission(prixPropose),
+          prixTotal: prixPropose + calcPropositionCommission(prixPropose),
           message: msgInp ? msgInp.value.trim() : '',
           statut: 'en_attente',
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -1851,7 +1892,8 @@ function bindPanelEvents(){
             chauffeurId: prop.chauffeurId, chauffeurNom: prop.chauffeurNom, chauffeurTelephone: prop.chauffeurTelephone || '',
             busId: prop.busId || null, busImmat: prop.busImmat || null, busEquipements: prop.busEquipements || null,
             prix: prop.prixTotal, commission: prop.commission, montantChauffeur: prop.prixPropose,
-            paiementStatut: 'non_paye'
+            paiementStatut: 'non_paye',
+            qrToken: genQrToken()
           });
           tx.update(db.collection('propositions').doc(propId), {statut:'acceptee'});
         });
@@ -1887,7 +1929,7 @@ function bindPanelEvents(){
         chauffeurTelephone: state.profile.telephone || '',
         lieuDepart: depart, lieuArrivee: arrivee, dateEvenement: date,
         placesDisponibles: places,
-        prixPropose: prix, commission: PROPOSITION_COMMISSION_FCFA, prixTotal: prix + PROPOSITION_COMMISSION_FCFA,
+        prixPropose: prix, commission: calcPropositionCommission(prix), prixTotal: prix + calcPropositionCommission(prix),
         busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements||[]) : null,
         message: msg,
         statut: 'ouvert',
@@ -1932,7 +1974,7 @@ function bindPanelEvents(){
         await db.collection('trajetsProposes').doc(id).update({
           lieuDepart: depart, lieuArrivee: arrivee, dateEvenement: date,
           placesDisponibles: places,
-          prixPropose: prix, commission: PROPOSITION_COMMISSION_FCFA, prixTotal: prix + PROPOSITION_COMMISSION_FCFA,
+          prixPropose: prix, commission: calcPropositionCommission(prix), prixTotal: prix + calcPropositionCommission(prix),
           busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements||[]) : null,
           message: msg
         });
@@ -2043,6 +2085,7 @@ function bindPanelEvents(){
             chauffeurId: tData.chauffeurId, chauffeurNom: tData.chauffeurNom, chauffeurTelephone: tData.chauffeurTelephone||'',
             prix: tData.prixTotal, commission: tData.commission, montantChauffeur: tData.prixPropose,
             paiementStatut: 'non_paye',
+            qrToken: genQrToken(),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           tx.update(trajetRef, {statut:'reserve'});
@@ -2092,6 +2135,8 @@ function bindPanelEvents(){
       }
       const prixNum = prixV ? Number(prixV) : null;
       const splitSave = prixNum ? calcSplit(prixNum) : { commission: null, montantChauffeur: null };
+      const existingRes = state.reservations.find(x=>x.id===id);
+      const needsToken = (statut==='confirmee' || statut==='en_route') && existingRes && !existingRes.qrToken;
       await db.collection('reservations').doc(id).update({
         statut,
         busId: bus ? bus.id : null,
@@ -2103,7 +2148,8 @@ function bindPanelEvents(){
         commission: splitSave.commission,
         montantChauffeur: splitSave.montantChauffeur,
         paiementStatut: paiementEl ? paiementEl.value : 'non_paye',
-        lienPaiement: lienEl ? lienEl.value.trim() : null
+        lienPaiement: lienEl ? lienEl.value.trim() : null,
+        ...(needsToken ? {qrToken: genQrToken()} : {})
       });
       showToast("Réservation mise à jour.");
     };
@@ -2160,6 +2206,127 @@ function bindPanelEvents(){
       await db.collection('reservations').doc(b.dataset.finishTrip).update({statut:'terminee'});
       showToast("Trajet marqué terminé.");
     };
+  });
+
+  /* ---- Billet QR client : affichage ---- */
+  document.querySelectorAll('[data-show-qr]').forEach(b=>{
+    b.onclick = ()=>{
+      openQrDisplayModal(b.dataset.showQr, b.dataset.qrToken);
+    };
+  });
+
+  /* ---- Billet QR chauffeur : scan camera pour valider l'embarquement ---- */
+  document.querySelectorAll('[data-scan-qr]').forEach(b=>{
+    b.onclick = ()=>{
+      openQrScanModal(b.dataset.scanQr, b.dataset.scanToken);
+    };
+  });
+}
+
+/* =========================================================
+   Modale d'affichage du billet QR (cote client)
+   ========================================================= */
+function openQrDisplayModal(resId, token){
+  const old = document.getElementById('qrModalOverlay');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'qrModalOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:26px;max-width:320px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35);">
+      <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">Ton billet Teranga Trans</div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:14px;">Montre ce QR au chauffeur à la montée dans le bus.</div>
+      <div id="qrCanvasHolder" style="display:flex;justify-content:center;margin-bottom:14px;"></div>
+      <div style="font-size:11px;color:var(--ink-soft);margin-bottom:14px;">Réf. #${esc(resId.slice(0,6).toUpperCase())}</div>
+      <button class="btn-sm btn-ghost" id="qrModalCloseBtn" style="width:100%;">Fermer</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  document.getElementById('qrModalCloseBtn').onclick = ()=> overlay.remove();
+  const holder = document.getElementById('qrCanvasHolder');
+  const payload = JSON.stringify({resId, token});
+  new QRCode(holder, { text: payload, width: 220, height: 220, colorDark: "#1A1A2E", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M });
+}
+
+/* =========================================================
+   Modale de scan camera (cote chauffeur) — valide l'embarquement
+   d'UNE reservation precise : le QR scanne doit correspondre a
+   la fois au resId et au token de CETTE reservation.
+   ========================================================= */
+function openQrScanModal(resId, expectedToken){
+  const old = document.getElementById('qrScanOverlay');
+  if(old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'qrScanOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:20px;max-width:340px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35);">
+      <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">Scanner le billet du client</div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;">Vise le QR affiché sur le téléphone du passager.</div>
+      <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;">
+        <video id="qrScanVideo" style="width:100%;display:block;" playsinline muted></video>
+      </div>
+      <div id="qrScanStatus" style="margin-top:10px;font-size:12.5px;color:var(--ink-soft);min-height:18px;"></div>
+      <button class="btn-sm btn-ghost" id="qrScanCloseBtn" style="width:100%;margin-top:10px;">Annuler</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const statusEl = document.getElementById('qrScanStatus');
+  const videoEl = document.getElementById('qrScanVideo');
+  let scanner = null;
+  let closed = false;
+
+  function closeModal(){
+    closed = true;
+    if(scanner){ scanner.stop(); scanner.destroy(); scanner = null; }
+    overlay.remove();
+  }
+  overlay.onclick = (e)=>{ if(e.target===overlay) closeModal(); };
+  document.getElementById('qrScanCloseBtn').onclick = closeModal;
+
+  if(!window.QrScanner || !QrScanner.hasCamera){
+    statusEl.textContent = "Caméra indisponible sur cet appareil/navigateur.";
+  }
+
+  scanner = new QrScanner(videoEl, async (result)=>{
+    if(closed) return;
+    const raw = result && result.data ? result.data : result;
+    let parsed;
+    try{ parsed = JSON.parse(raw); }catch(e){
+      statusEl.textContent = "QR non reconnu — réessaie.";
+      return;
+    }
+    if(!parsed || parsed.resId !== resId || parsed.token !== expectedToken){
+      statusEl.textContent = "❌ Ce billet ne correspond pas à cette réservation.";
+      return;
+    }
+    // Verification anti-fraude + ecriture atomique cote Firestore : on
+    // s'assure qu'il n'a pas deja ete scanne avant de valider.
+    scanner.stop();
+    statusEl.textContent = "Vérification…";
+    try{
+      await db.runTransaction(async (tx)=>{
+        const ref = db.collection('reservations').doc(resId);
+        const snap = await tx.get(ref);
+        if(!snap.exists) throw new Error("Réservation introuvable.");
+        const data = snap.data();
+        if(data.qrToken !== expectedToken) throw new Error("Billet invalide.");
+        if(data.embarquementValide) throw new Error("Ce billet a déjà été scanné.");
+        tx.update(ref, {
+          embarquementValide: true,
+          embarquementAt: firebase.firestore.FieldValue.serverTimestamp(),
+          embarquementPar: state.user ? state.user.uid : null
+        });
+      });
+      statusEl.textContent = "✅ Billet valide — passager embarqué !";
+      showToast("Passager embarqué avec succès !");
+      setTimeout(closeModal, 1200);
+    }catch(err){
+      statusEl.textContent = "❌ " + err.message;
+    }
+  }, { returnDetailedScanResult: true });
+
+  scanner.start().catch(()=>{
+    statusEl.textContent = "Impossible d'accéder à la caméra. Vérifie les permissions.";
   });
 }
 
@@ -2381,3 +2548,4 @@ render();
 </script>
 </body>
 </html>
+  
