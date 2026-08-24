@@ -1100,6 +1100,8 @@ async function submitReservation(e){
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   try{
+    console.log('[DEBUG envoi réservation] uid connecté =', state.user && state.user.uid);
+    console.log('[DEBUG envoi réservation] données envoyées =', JSON.stringify(data, (k,v)=> v===undefined?'UNDEFINED':v, 2));
     const ref = await db.collection('reservations').add(data);
     // Affichage immediat : on insere la reservation localement en attendant
     // que l'ecoute temps reel la renvoie (evite l'impression qu'elle a disparu).
@@ -1110,7 +1112,8 @@ async function submitReservation(e){
     state.activePanel = 'mesreservations';
     renderPanel();
   }catch(err){
-    console.error('Erreur envoi réservation:', err);
+    console.error('[DEBUG envoi réservation] Erreur complète:', err);
+    console.error('[DEBUG envoi réservation] code =', err && err.code, '| message =', err && err.message);
     showToast("Échec de l'envoi : " + (err && err.message ? err.message : 'erreur inconnue'));
   }
 }
