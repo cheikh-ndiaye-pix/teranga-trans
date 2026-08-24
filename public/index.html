@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teranga Trans — Réservation de bus pour événements</title>
-<meta name="theme-color"content="#0B3D24">
+<meta name="theme-color" content="#0B3D24">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Teranga Trans">
@@ -1044,6 +1044,12 @@ function renderNouvelleReservation(){
       </div>
       <div class="grid-2">
         <div class="field">
+          <label>Heure de départ</label>
+          <input type="time" id="r-heure" required>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="field">
           <label>Lieu de départ</label>
           <input type="text" id="r-depart" placeholder="Ex: Rufisque, Marché central" required>
         </div>
@@ -1083,6 +1089,7 @@ async function submitReservation(e){
     clientTelephone: document.getElementById('r-tel').value.trim(),
     typeEvenement: document.getElementById('r-type').value,
     dateEvenement: document.getElementById('r-date').value,
+    heureEvenement: document.getElementById('r-heure').value,
     lieuDepart: document.getElementById('r-depart').value.trim(),
     lieuArrivee: document.getElementById('r-arrivee').value.trim(),
     nbPassagers: Number(document.getElementById('r-passagers').value),
@@ -1568,7 +1575,7 @@ function renderClientPortefeuille(){
 }
 
 function chauffeurOffreCard(r){
-  const dateFmt = r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const dateFmt = (r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—') + (r.heureEvenement ? ` à ${esc(r.heureEvenement)}` : '');
   const mine = state.myPropositions.find(p=>p.reservationId===r.id && p.statut==='en_attente');
   let box;
   if(mine){
@@ -1661,7 +1668,7 @@ function renderChauffeurStats(){
 /* ---------- Ticket card (shared component) ---------- */
 function ticketCard(r, mode){
   const st = r.statut;
-  const dateFmt = r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+  const dateFmt = (r.dateEvenement ? new Date(r.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) : '—') + (r.heureEvenement ? ` à ${esc(r.heureEvenement)}` : '');
   let actions = '';
   if(mode==='admin' && st==='en_attente'){
     actions = `
