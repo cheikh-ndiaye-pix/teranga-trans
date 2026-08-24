@@ -1092,10 +1092,20 @@ async function submitReservation(e){
     busId: null, busImmat: null, busEquipements: null, chauffeurId: null, chauffeurNom: null, prix: null,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  await db.collection('reservations').add(data);
-  showToast("Demande envoyée ! Tu seras notifié une fois confirmée.");
-  state.activePanel = 'mesreservations';
-  renderPanel();
+  try{
+    const ref = await db.collection('reservations').add(data);
+    // Affichage immediat : on insere la reservation localement en attendant
+    // que l'ecoute temps reel la renvoie (evite l'impression qu'elle a disparu).
+    if(!state.reservations.some(r=>r.id===ref.id)){
+      state.reservations = [{id:ref.id, ...data, createdAt:null, _ts: Date.now()}, ...state.reservations];
+    }
+    showToast("Demande envoyée ! Tu seras notifié une fois confirmée.");
+    state.activePanel = 'mesreservations';
+    renderPanel();
+  }catch(err){
+    console.error('Erreur envoi réservation:', err);
+    showToast("Échec de l'envoi : " + (err && err.message ? err.message : 'erreur inconnue'));
+  }
 }
 
 /* ---------- Client: mes réservations ---------- */
@@ -2764,7 +2774,7 @@ function attachListeners(){
   unsubs.push(reservationsQuery.onSnapshot(snap=>{
     const next = snap.docs.map(d=>{
       const data = d.data();
-      return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+      return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
     });
     // Notification en temps reel (client/chauffeur uniquement) : on compare
     // le statut connu de chaque reservation avec le nouveau, et on previent
@@ -2786,7 +2796,7 @@ function attachListeners(){
     }
     state.reservations = next;
     if(document.getElementById('panelHost')) renderPanel();
-  }, err=>console.error('Erreur écoute reservations:', err)));
+  }, err=>{ console.error('Erreur écoute reservations:', err); showToast("Impossible de charger tes réservations : " + (err && err.message ? err.message : 'erreur')); }));
 
   if(role === 'admin'){
     unsubs.push(db.collection('buses').onSnapshot(snap=>{
@@ -2817,7 +2827,7 @@ function attachListeners(){
     unsubs.push(db.collection('reservations').where('statut','==','en_attente').onSnapshot(snap=>{
       state.openRequests = snap.docs.map(d=>{
         const data = d.data();
-        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
       });
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute demandes ouvertes:', err)));
@@ -2832,7 +2842,7 @@ function attachListeners(){
     unsubs.push(db.collection('trajetsProposes').where('chauffeurId','==', uid).onSnapshot(snap=>{
       state.mesTrajetsProposes = snap.docs.map(d=>{
         const data = d.data();
-        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
       });
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute mes trajets publiés:', err)));
@@ -2852,7 +2862,7 @@ function attachListeners(){
     unsubs.push(db.collection('trajetsProposes').where('statut','==','ouvert').onSnapshot(snap=>{
       state.trajetsProposes = snap.docs.map(d=>{
         const data = d.data();
-        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
       });
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute trajets proposés:', err)));
@@ -2861,7 +2871,7 @@ function attachListeners(){
     unsubs.push(db.collection('rechargements').where('clientId','==', uid).onSnapshot(snap=>{
       state.rechargements = snap.docs.map(d=>{
         const data = d.data();
-        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : 0};
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
       }).sort((a,b)=>b._ts-a._ts);
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute recharges:', err)));
