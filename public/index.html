@@ -1138,7 +1138,10 @@ function renderPropositionsForClient(r){
   const offers = state.propositions
     .filter(p=>p.reservationId===r.id && p.statut==='en_attente')
     .sort((a,b)=>(a.prixTotal||0)-(b.prixTotal||0));
-  if(offers.length===0) return '';
+  if(offers.length===0) return `
+  <div class="card" style="margin-top:-10px;margin-bottom:20px;">
+    <div style="font-size:13px;color:var(--ink-soft);">⏳ Ta demande est visible par tous les chauffeurs. Dès qu'un chauffeur propose un prix, il s'affiche ici et c'est toi qui choisis.</div>
+  </div>`;
   const solde = Number((state.profile && state.profile.solde) || 0);
   return `
   <div class="card" style="margin-top:-10px;margin-bottom:20px;">
