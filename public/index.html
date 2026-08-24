@@ -1561,6 +1561,17 @@ function renderClientPortefeuille(){
       <button class="btn-primary" type="submit" id="rechargeSubmitBtn" style="width:auto;padding:11px 20px;">Recharger via PayTech</button>
     </form>
   </div>
+  <div class="card" style="margin-bottom:24px;border:2px dashed var(--gold);background:#FBF1DE;">
+    <h3 style="margin:0 0 4px;font-size:15px;">🧪 Simuler une recharge (test)</h3>
+    <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:12px;">Ajoute de l'argent fictif à ton solde instantanément, sans passer par un vrai paiement. Réservé aux tests.</div>
+    <form id="simulateRechargeForm">
+      <div class="field">
+        <label>Montant à ajouter (FCFA)</label>
+        <input type="number" min="100" step="100" id="sim-montant" placeholder="Ex: 10000" required>
+      </div>
+      <button class="btn-sm btn-night" type="submit" id="simulateRechargeBtn">Ajouter au solde (simulation)</button>
+    </form>
+  </div>
   ${rechs.length===0 ? '' : `
   <div class="section-title"><h3 style="margin:0;font-size:15px;">Historique des recharges</h3></div>
   ${rechs.map(r=>`
@@ -2235,6 +2246,26 @@ function bindPanelEvents(){
       showToast("Erreur : " + (err.message || "impossible de lancer le paiement."));
       btn.disabled = false; btn.textContent = 'Recharger via PayTech';
     }
+  };
+
+  /* ---- Simulation de recharge (test) : ajoute directement au solde, sans PayTech ---- */
+  const simulateRechargeForm = document.getElementById('simulateRechargeForm');
+  if(simulateRechargeForm) simulateRechargeForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const amount = Number(document.getElementById('sim-montant').value)||0;
+    if(amount <= 0){ showToast("Montant invalide."); return; }
+    const btn = document.getElementById('simulateRechargeBtn');
+    btn.disabled = true; btn.textContent = 'Ajout en cours...';
+    try{
+      await db.collection('users').doc(state.user.uid).update({
+        solde: firebase.firestore.FieldValue.increment(amount)
+      });
+      showToast(`+${amount.toLocaleString('fr-FR')} FCFA ajoutés à ton solde (simulation) !`);
+      document.getElementById('sim-montant').value = '';
+    }catch(err){
+      showToast("Erreur : " + (err.message || "impossible d'ajouter au solde."));
+    }
+    btn.disabled = false; btn.textContent = 'Ajouter au solde (simulation)';
   };
 
   document.querySelectorAll('[data-pay-proposition-wallet]').forEach(b=>{
