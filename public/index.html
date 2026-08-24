@@ -566,7 +566,13 @@ let state = {
   mesTrajetsProposes:[], // (chauffeur) ses propres trajets publies, tous statuts
   clientTrajetSearch:'',
   // ---- Portefeuille / recharge PayTech ----
-  rechargements:[]       // (client) historique de ses demandes de recharge PayTech
+  rechargements:[],      // (client) historique de ses demandes de recharge PayTech
+  // ---- Retraits chauffeur (gains -> compte Wave, valides par l'admin) ----
+  myRetraits:[],         // (chauffeur) ses propres demandes de retrait
+  retraits:[],           // (admin) toutes les demandes de retrait
+  // ---- Notifications (retraits, paiements...) de l'utilisateur connecte ----
+  notifications:[],
+  knownNotifIds:null
 };
 
 const root = document.getElementById('root');
@@ -771,7 +777,7 @@ function bindAuthEvents(){
       nom, telephone: tel, email: email || null, role: finalRole,
       status: finalStatus,
       numeroPermis: finalRole==='chauffeur' ? permis : null,
-      solde: finalRole==='client' ? 10000 : null,
+      solde: finalRole==='client' ? 10000 : (finalRole==='chauffeur' ? 0 : null),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
     try{
@@ -914,8 +920,8 @@ function renderShell(){
   const roleLabel = role === 'client' ? 'Client' : role === 'admin' ? 'Admin' : 'Chauffeur';
   let navItems = [];
   if(role === 'client') navItems = [['nouvelle','Nouvelle réservation'],['trajetschauffeurs','Trajets proposés'],['portefeuille','Mon portefeuille'],['mesreservations','Mes réservations'],['profil','Mon profil']];
-  if(role === 'admin') navItems = [['apercu','Vue d\'ensemble'],['demandes','Demandes'],['toutes','Toutes les réservations'],['utilisateurs','Utilisateurs'],['flotte','Flotte'],['chauffeurs','Chauffeurs'],['profil','Mon profil']];
-  if(role === 'chauffeur') navItems = [['offres','Demandes clients'],['proposer','Proposer un trajet'],['mestrajets','Mes trajets'],['stats','Mes stats'],['profil','Mon profil']];
+  if(role === 'admin') navItems = [['apercu','Vue d\'ensemble'],['demandes','Demandes'],['toutes','Toutes les réservations'],['utilisateurs','Utilisateurs'],['flotte','Flotte'],['chauffeurs','Chauffeurs'],['retraits','Retraits'],['profil','Mon profil']];
+  if(role === 'chauffeur') navItems = [['offres','Demandes clients'],['proposer','Proposer un trajet'],['mestrajets','Mes trajets'],['portefeuille','Mon portefeuille'],['stats','Mes stats'],['profil','Mon profil']];
 
   if(!state.activePanel) state.activePanel = navItems[0][0];
 
@@ -982,6 +988,8 @@ function renderPanel(){
   else if(role==='chauffeur' && panel==='offres') host.innerHTML = renderChauffeurOffres();
   else if(role==='chauffeur' && panel==='proposer') host.innerHTML = renderChauffeurProposer();
   else if(role==='chauffeur' && panel==='mestrajets') host.innerHTML = renderMesTrajets();
+  else if(role==='chauffeur' && panel==='portefeuille') host.innerHTML = renderChauffeurPortefeuille();
+  else if(role==='admin' && panel==='retraits') host.innerHTML = renderAdminRetraits();
   else if(role==='chauffeur' && panel==='stats') host.innerHTML = renderChauffeurStats();
   else if(panel==='profil') host.innerHTML = renderProfil();
   bindPanelEvents();
@@ -1535,6 +1543,211 @@ function clientTrajetProposeCard(t){
   </div>`;
 }
 
+/* ================= HISTORIQUE DES MOUVEMENTS (chauffeur & client) =================
+   Un "mouvement" est une ligne de compte : un credit (+) ou un debit (-),
+   avec sa date, son statut et une reference courte tracable. */
+function fmtDateTime(ts){
+  if(!ts) return '—';
+  try{ return new Date(ts).toLocaleString('fr-FR',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  catch(e){ return '—'; }
+}
+function refCourt(prefix, id){
+  return prefix + '-' + String(id||'').slice(0,6).toUpperCase();
+}
+function mvtStatutBadge(st){
+  const map = {
+    effectue:  '<span class="status-dot st-terminee"></span>Effectué',
+    en_attente:'<span class="status-dot st-en_attente"></span>En attente',
+    annule:    '<span class="status-dot st-annulee"></span>Annulé',
+  };
+  return map[st] || esc(st||'');
+}
+
+/* Mouvements du CHAUFFEUR : credits de commission (part sur trajets termines)
+   et debits de retrait vers Wave. */
+function buildMouvementsChauffeur(){
+  const uid = state.user.uid;
+  const rows = [];
+  state.reservations.filter(r=>r.chauffeurId===uid && r.paiementChauffeurVerse && Number(r.montantChauffeur||0)>0).forEach(r=>{
+    rows.push({
+      ts: r.termineAtTs || r._ts || 0,
+      sens: 1,
+      montant: Number(r.montantChauffeur||0),
+      libelle: 'Gain trajet ' + esc(r.lieuDepart||'—') + ' → ' + esc(r.lieuArrivee||'—'),
+      detail: 'Prix total ' + Number(r.prix||0).toLocaleString('fr-FR') + ' FCFA — commission Teranga ' + Number(r.commission||0).toLocaleString('fr-FR') + ' FCFA',
+      statut: 'effectue',
+      reference: refCourt('TRJ', r.id)
+    });
+  });
+  state.myRetraits.forEach(r=>{
+    const st = r.statut==='paye' ? 'effectue' : (r.statut==='refuse' ? 'annule' : 'en_attente');
+    let detail;
+    if(r.statut==='refuse') detail = 'Refusé — motif : ' + esc(r.motifRefus||'non précisé');
+    else if(r.statut==='paye') detail = 'Payé sur ton compte Wave';
+    else if(r.statut==='approuve') detail = 'Validé par l\'administrateur — paiement Wave en cours';
+    else detail = 'En attente de validation par l\'administrateur';
+    rows.push({
+      ts: (r.statut==='paye' && r.payeAtTs) ? r.payeAtTs : ((r.statut==='approuve' && r.approuveAtTs) ? r.approuveAtTs : (r._ts||0)),
+      sens: -1,
+      montant: Number(r.montant||0),
+      libelle: 'Retrait vers Wave ' + esc(r.numeroWave||'—'),
+      detail,
+      statut: st,
+      reference: refCourt('RET', r.id)
+    });
+  });
+  return rows.sort((a,b)=>b.ts-a.ts);
+}
+
+/* Mouvements du CLIENT : recharges de portefeuille (+) et paiements de
+   reservations (-). */
+function buildMouvementsClient(){
+  const uid = state.user.uid;
+  const rows = [];
+  state.rechargements.forEach(r=>{
+    const st = r.statut==='validee' ? 'effectue' : (r.statut==='echouee' ? 'annule' : 'en_attente');
+    rows.push({
+      ts: r._ts||0, sens: 1, montant: Number(r.montant||0),
+      libelle: 'Recharge du portefeuille' + (r.moyen ? ' (' + esc(r.moyen) + ')' : ' (PayTech / Wave)'),
+      detail: st==='effectue' ? 'Solde crédité' : (st==='annule' ? 'Paiement échoué ou annulé' : 'Paiement en cours de confirmation'),
+      statut: st, reference: refCourt('RCH', r.id)
+    });
+  });
+  state.reservations.filter(r=>r.clientId===uid && r.paiementStatut==='paye' && Number(r.prix||0)>0).forEach(r=>{
+    rows.push({
+      ts: r.payeAtTs || r._ts || 0, sens: -1, montant: Number(r.prix||0),
+      libelle: 'Paiement trajet ' + esc(r.lieuDepart||'—') + ' → ' + esc(r.lieuArrivee||'—'),
+      detail: (r.dateEvenement ? 'Départ le ' + esc(r.dateEvenement) : '') + (r.chauffeurNom ? ' • Chauffeur ' + esc(r.chauffeurNom) : ''),
+      statut: r.statut==='annulee' ? 'annule' : 'effectue',
+      reference: refCourt('RES', r.id)
+    });
+  });
+  state.reservations.filter(r=>r.clientId===uid && r.paiementStatut!=='paye' && Number(r.prix||0)>0).forEach(r=>{
+    rows.push({
+      ts: r._ts||0, sens: -1, montant: Number(r.prix||0),
+      libelle: 'Trajet à payer ' + esc(r.lieuDepart||'—') + ' → ' + esc(r.lieuArrivee||'—'),
+      detail: 'Paiement non encore effectué',
+      statut: r.statut==='annulee' ? 'annule' : 'en_attente',
+      reference: refCourt('RES', r.id)
+    });
+  });
+  return rows.sort((a,b)=>b.ts-a.ts);
+}
+
+function renderMouvements(rows, titre){
+  const credits = rows.filter(r=>r.sens>0 && r.statut==='effectue').reduce((s,r)=>s+r.montant,0);
+  const debits  = rows.filter(r=>r.sens<0 && r.statut==='effectue').reduce((s,r)=>s+r.montant,0);
+  return `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">${esc(titre)}</h3></div>
+  <div class="card" style="margin-bottom:14px;display:flex;gap:18px;flex-wrap:wrap;justify-content:space-around;text-align:center;">
+    <div><div style="font-size:11.5px;color:var(--ink-soft);text-transform:uppercase;">Total crédité</div><div style="font-size:18px;font-weight:800;color:var(--forest);">+${credits.toLocaleString('fr-FR')} FCFA</div></div>
+    <div><div style="font-size:11.5px;color:var(--ink-soft);text-transform:uppercase;">Total débité</div><div style="font-size:18px;font-weight:800;color:var(--red);">-${debits.toLocaleString('fr-FR')} FCFA</div></div>
+    <div><div style="font-size:11.5px;color:var(--ink-soft);text-transform:uppercase;">Mouvements</div><div style="font-size:18px;font-weight:800;">${rows.length}</div></div>
+  </div>
+  ${rows.length===0 ? `<div class="card" style="text-align:center;color:var(--ink-soft);font-size:13px;">Aucun mouvement pour l'instant.</div>` : `
+  <div class="card" style="padding:0;overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px;">
+      <thead>
+        <tr style="background:#F6F1E7;text-align:left;">
+          <th style="padding:10px 12px;">Date</th>
+          <th style="padding:10px 12px;">Libellé</th>
+          <th style="padding:10px 12px;">Référence</th>
+          <th style="padding:10px 12px;">Statut</th>
+          <th style="padding:10px 12px;text-align:right;">Montant</th>
+        </tr>
+      </thead>
+      <tbody>
+      ${rows.map(r=>`
+        <tr style="border-top:1px solid #EDE5D6;">
+          <td style="padding:10px 12px;white-space:nowrap;color:var(--ink-soft);">${fmtDateTime(r.ts)}</td>
+          <td style="padding:10px 12px;">
+            <div style="font-weight:600;">${r.libelle}</div>
+            ${r.detail ? `<div style="color:var(--ink-soft);font-size:11.5px;margin-top:2px;">${r.detail}</div>` : ``}
+          </td>
+          <td style="padding:10px 12px;font-family:monospace;white-space:nowrap;">${esc(r.reference)}</td>
+          <td style="padding:10px 12px;white-space:nowrap;">${mvtStatutBadge(r.statut)}</td>
+          <td style="padding:10px 12px;text-align:right;white-space:nowrap;font-weight:800;color:${r.statut==='annule' ? 'var(--ink-soft)' : (r.sens>0 ? 'var(--forest)' : 'var(--red)')};">
+            ${r.sens>0?'+':'-'}${r.montant.toLocaleString('fr-FR')} FCFA
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`}
+  `;
+}
+
+/* ---------- Notifications de l'utilisateur ---------- */
+function renderNotificationsCard(){
+  const list = [...state.notifications].sort((a,b)=>(b._ts||0)-(a._ts||0)).slice(0,20);
+  if(list.length===0) return '';
+  const nonLues = list.filter(n=>!n.lu).length;
+  return `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">Mes notifications${nonLues?` <span class="pay-badge non_paye">${nonLues} non lue${nonLues>1?'s':''}</span>`:''}</h3></div>
+  <div class="card" style="margin-bottom:24px;">
+    ${nonLues ? `<div style="text-align:right;margin-bottom:8px;"><button class="btn-sm btn-ghost" id="markNotifsRead">Tout marquer comme lu</button></div>` : ``}
+    ${list.map(n=>`
+      <div style="padding:10px 0;border-bottom:1px solid #EDE5D6;${n.lu?'opacity:.65;':''}">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <b style="font-size:13px;">${esc(n.titre||'Notification')}</b>
+          <span style="font-size:11.5px;color:var(--ink-soft);">${fmtDateTime(n._ts)}</span>
+        </div>
+        <div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px;">${esc(n.message||'')}</div>
+        ${n.canaux ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:3px;">Envoyée par : ${esc(n.canaux)}</div>` : ``}
+      </div>`).join('')}
+  </div>`;
+}
+
+/* Envoi d'une notification a un utilisateur :
+   - toujours une ligne dans "notifications" (centre de notifications in-app)
+   - + un document dans "mail" (extension Firebase "Trigger Email") si on
+     connait l'adresse email : Firebase envoie alors l'email tout seul.
+   - le canal WhatsApp/SMS est declenche cote admin par un lien wa.me / sms:
+     (aucune cle API a exposer dans le navigateur). */
+async function pushNotification(userId, titre, message, opts){
+  opts = opts || {};
+  const canaux = ['application'];
+  try{
+    if(opts.email){
+      canaux.push('email');
+      await db.collection('mail').add({
+        to: [opts.email],
+        message: {
+          subject: '[Teranga Trans] ' + titre,
+          text: message,
+          html: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1c2b24;">
+            <h2 style="color:#1F4B3F;margin:0 0 10px;">${esc(titre)}</h2>
+            <p style="line-height:1.55;">${esc(message)}</p>
+            <p style="color:#7a8b83;font-size:12px;margin-top:18px;">Teranga Trans — transport & location de bus au Sénégal</p>
+          </div>`
+        },
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  }catch(e){ console.error('Erreur envoi email', e); }
+  try{
+    await db.collection('notifications').add({
+      userId, titre, message,
+      type: opts.type || 'info',
+      refId: opts.refId || null,
+      canaux: canaux.join(', '),
+      lu: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(e){ console.error('Erreur notification', e); }
+}
+
+/* Ouvre WhatsApp (ou SMS en repli) prerempli pour prevenir le chauffeur.
+   Utilise par l'admin au moment de valider / refuser un retrait. */
+function ouvrirWhatsApp(telephone, message){
+  if(!telephone) return false;
+  let num = String(telephone).replace(/[^0-9+]/g,'');
+  if(num.startsWith('+')) num = num.slice(1);
+  if(num.length === 9) num = '221' + num;          // numero senegalais local
+  if(num.startsWith('00')) num = num.slice(2);
+  window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(message), '_blank', 'noopener');
+  return true;
+}
+
 /* ---------- Client: portefeuille (solde + recharge PayTech) ---------- */
 function renderClientPortefeuille(){
   const solde = Number((state.profile && state.profile.solde) || 0);
@@ -1572,6 +1785,9 @@ function renderClientPortefeuille(){
       <button class="btn-sm btn-night" type="submit" id="simulateRechargeBtn">Ajouter au solde (simulation)</button>
     </form>
   </div>
+  ${renderNotificationsCard()}
+  ${renderMouvements(buildMouvementsClient(), 'Historique complet de mes mouvements')}
+  <div style="height:24px;"></div>
   ${rechs.length===0 ? '' : `
   <div class="section-title"><h3 style="margin:0;font-size:15px;">Historique des recharges</h3></div>
   ${rechs.map(r=>`
@@ -1682,6 +1898,118 @@ function renderChauffeurStats(){
   `;
 }
 
+
+/* ---------- Chauffeur: portefeuille (gains + retrait vers Wave) ---------- */
+function retraitStatutBadge(st){
+  const map = {
+    en_attente: '<span class="status-dot st-en_attente"></span>En attente de validation admin',
+    approuve: '<span class="status-dot st-confirmee"></span>Validé — paiement Wave en cours',
+    paye: '<span class="status-dot st-terminee"></span>Payé sur Wave',
+    refuse: '<span class="status-dot st-annulee"></span>Refusé',
+  };
+  return map[st] || esc(st||'');
+}
+
+function renderChauffeurPortefeuille(){
+  const solde = Number((state.profile && state.profile.solde) || 0);
+  const list = [...state.myRetraits].sort((a,b)=>(b._ts||0)-(a._ts||0));
+  const enAttente = list.filter(r=>r.statut==='en_attente');
+  const bloque = enAttente.reduce((sum,r)=>sum+Number(r.montant||0),0);
+  const dispo = Math.max(0, solde - bloque);
+  return `
+  <div class="section-title"><h2>Mon portefeuille</h2></div>
+  <div class="card" style="margin-bottom:20px;text-align:center;padding:28px 16px;">
+    <div style="font-size:12.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;">Mes gains disponibles</div>
+    <div style="font-size:34px;font-weight:800;color:var(--forest);margin-top:6px;">${solde.toLocaleString('fr-FR')} FCFA</div>
+    ${bloque>0 ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">dont <b>${bloque.toLocaleString('fr-FR')} FCFA</b> en attente de retrait — retirable : <b>${dispo.toLocaleString('fr-FR')} FCFA</b></div>` : ``}
+  </div>
+  <div class="card" style="margin-bottom:24px;">
+    <h3 style="margin:0 0 12px;font-size:15px;">Retirer mon argent sur Wave</h3>
+    <form id="retraitForm">
+      <div class="field">
+        <label>Montant à retirer (FCFA)</label>
+        <input type="number" min="1000" step="500" id="rt-montant" placeholder="Ex: 25000" required>
+      </div>
+      <div class="field">
+        <label>Numéro Wave à créditer</label>
+        <input type="tel" id="rt-wave" placeholder="Ex: 77 123 45 67" value="${esc((state.profile && state.profile.telephone) || '')}" required>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin:8px 0 12px;">Ta demande part chez l'administrateur. Dès qu'il la valide, ton solde est débité et ton compte Wave est crédité du montant en quelques minutes.</div>
+      <button class="btn-primary" type="submit" id="retraitSubmitBtn" style="width:auto;padding:11px 20px;">Demander le retrait</button>
+    </form>
+  </div>
+  ${renderNotificationsCard()}
+  ${renderMouvements(buildMouvementsChauffeur(), 'Historique complet de mes mouvements')}
+  <div style="height:24px;"></div>
+  ${list.length===0 ? '' : `
+  <div class="section-title"><h3 style="margin:0;font-size:15px;">Historique de mes retraits</h3></div>
+  ${list.map(r=>`
+    <div class="ticket">
+      <div class="stub-main">
+        <div style="font-size:15px;font-weight:700;">${Number(r.montant||0).toLocaleString('fr-FR')} FCFA</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">Wave : ${esc(r.numeroWave||'—')}</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:2px;">${r._ts ? new Date(r._ts).toLocaleString('fr-FR') : ''}</div>
+        ${r.motifRefus ? `<div style="font-size:12px;color:var(--red);margin-top:4px;">Motif : ${esc(r.motifRefus)}</div>` : ``}
+      </div>
+      <div class="perforation"></div>
+      <div class="stub-side">
+        <div class="status-label">Statut</div>
+        <div class="status-value">${retraitStatutBadge(r.statut)}</div>
+      </div>
+    </div>
+  `).join('')}`}
+  `;
+}
+
+/* ---------- Admin: demandes de retrait des chauffeurs ---------- */
+function renderAdminRetraits(){
+  const list = [...state.retraits].sort((a,b)=>(b._ts||0)-(a._ts||0));
+  const enAttente = list.filter(r=>r.statut==='en_attente');
+  const approuves = list.filter(r=>r.statut==='approuve');
+  const traites = list.filter(r=>r.statut==='paye' || r.statut==='refuse');
+  const total = enAttente.reduce((s,r)=>s+Number(r.montant||0),0);
+  const totalAPayer = approuves.reduce((s,r)=>s+Number(r.montant||0),0);
+  const card = (r, actions) => `
+    <div class="card" style="margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-weight:700;font-size:15px;color:var(--night);">${esc(r.chauffeurNom||'Chauffeur')}</div>
+          <div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px;">Wave : <b>${esc(r.numeroWave||'—')}</b>${r.chauffeurTelephone?` • Tél : ${esc(r.chauffeurTelephone)}`:''}</div>
+          <div style="font-size:12px;color:var(--ink-soft);margin-top:2px;">${r._ts ? new Date(r._ts).toLocaleString('fr-FR') : ''}</div>
+        </div>
+        <div style="font-size:22px;font-weight:800;color:var(--forest);">${Number(r.montant||0).toLocaleString('fr-FR')} FCFA</div>
+      </div>
+      <div style="font-size:12.5px;margin-top:8px;">${retraitStatutBadge(r.statut)}</div>
+      ${r.motifRefus ? `<div style="font-size:12px;color:var(--red);margin-top:4px;">Motif : ${esc(r.motifRefus)}</div>` : ``}
+      ${actions}
+    </div>`;
+  return `
+  <div class="section-title"><h2>Retraits chauffeurs</h2></div>
+  <p style="font-size:12.5px;color:var(--ink-soft);margin-top:-10px;margin-bottom:16px;">Tu es le seul à avoir accès à PayTech / Wave. Étape 1 : tu valides la demande (le solde du chauffeur est débité immédiatement). Étape 2 : une fois l'argent réellement envoyé depuis ton compte Wave, tu marques la demande comme payée.</p>
+  <div class="stat-grid" style="margin-bottom:18px;">
+    <div class="stat-card"><div class="stat-value">${enAttente.length}</div><div class="stat-label">Demandes en attente</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--gold);">${total.toLocaleString('fr-FR')}</div><div class="stat-label">FCFA à valider</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--night);">${approuves.length}</div><div class="stat-label">À payer sur Wave</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--forest);">${totalAPayer.toLocaleString('fr-FR')}</div><div class="stat-label">FCFA à envoyer</div></div>
+  </div>
+  ${enAttente.length===0 ? `<p style="color:var(--ink-soft);font-size:13.5px;">Aucune nouvelle demande de retrait en attente.</p>` :
+    enAttente.map(r=>card(r, `
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn-sm btn-confirm" data-approve-retrait="${r.id}">✅ Valider et débiter</button>
+        <button class="btn-sm btn-ghost" data-refuse-retrait="${r.id}">Refuser</button>
+      </div>`)).join('')}
+  ${approuves.length===0 ? '' : `
+  <div class="section-title" style="margin-top:26px;"><h3 style="margin:0;font-size:15px;">Validés — à payer sur Wave</h3></div>
+  ${approuves.map(r=>card(r, `
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn-sm btn-confirm" data-marquer-paye-retrait="${r.id}">💸 Marquer payé sur Wave</button>
+      </div>`)).join('')}`}
+  ${traites.length===0 ? '' : `
+  <div class="section-title" style="margin-top:26px;"><h3 style="margin:0;font-size:15px;">Historique</h3></div>
+  ${traites.map(r=>card(r,'')).join('')}`}
+  `;
+}
+
 /* ---------- Ticket card (shared component) ---------- */
 function ticketCard(r, mode){
   const st = r.statut;
@@ -1765,7 +2093,11 @@ function ticketCard(r, mode){
     actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-accept-trajet="${r.id}">✅ Accepter le trajet</button><button class="btn-sm btn-red" data-reject-trajet="${r.id}">❌ Refuser</button></div>`;
   }
   if(mode==='chauffeur' && st==='confirmee'){
-    actions = `<div class="btn-row"><button class="btn-sm btn-night" data-start-trip="${r.id}">Démarrer le trajet</button></div>`;
+    // Le trajet ne peut démarrer qu'APRÈS avoir scanné le billet du client
+    // (vérification du nombre de places réservées) — voir bloc scan ci-dessous.
+    actions = r.embarquementValide
+      ? `<div class="btn-row"><button class="btn-sm btn-night" data-start-trip="${r.id}">Démarrer le trajet</button></div>`
+      : `<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">⚠️ Scanne d'abord le billet du client (vérifie les <b>${esc(r.nbPassagers)} places</b>) avant de pouvoir démarrer le trajet.</div>`;
   }
   if(mode==='chauffeur' && st==='en_route'){
     actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-finish-trip="${r.id}">Marquer terminé</button></div>`;
@@ -1773,15 +2105,21 @@ function ticketCard(r, mode){
   if(mode==='chauffeur' && (st==='confirmee' || st==='en_route') && r.qrToken){
     actions += r.embarquementValide
       ? `<div style="margin-top:8px;font-size:12.5px;color:var(--gold);font-weight:700;">✅ Billet vérifié — passager embarqué</div>`
-      : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-night" data-scan-qr="${r.id}" data-scan-token="${esc(r.qrToken)}">📷 Scanner le billet du client</button></div>`;
+      : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-night" data-scan-qr="${r.id}" data-scan-token="${esc(r.qrToken)}">📷 Scanner le billet (${esc(r.nbPassagers)} places)</button></div>`;
+  }
+  if(mode==='chauffeur' && (st==='confirmee' || st==='en_route')){
+    actions += `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-track-res="${r.id}">🗺️ Voir la position du client</button></div>`;
   }
   if(mode==='client' && (st==='confirmee' || st==='en_route') && r.qrToken){
     actions += r.embarquementValide
       ? `<div style="margin-top:8px;font-size:12.5px;color:var(--gold);font-weight:700;">✅ Embarquement validé</div>`
       : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-confirm" data-show-qr="${r.id}" data-qr-token="${esc(r.qrToken)}">🎫 Voir mon billet QR</button></div>`;
   }
+  if(mode==='client' && (st==='confirmee' || st==='en_route')){
+    actions += `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-track-res="${r.id}">🗺️ Voir la position du chauffeur</button></div>`;
+  }
   if(mode==='client' && (st==='en_attente' || st==='confirmee')){
-    actions = `<div class="btn-row"><button class="btn-sm btn-ghost" data-cancel-res="${r.id}">Annuler la réservation</button></div>`;
+    actions += `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-cancel-res="${r.id}">Annuler la réservation</button></div>`;
   }
   if(mode==='client' && st==='terminee' && !r.note){
     actions = `
@@ -2459,22 +2797,172 @@ function bindPanelEvents(){
   });
   document.querySelectorAll('[data-finish-trip]').forEach(b=>{
     b.onclick = async ()=>{
-      await db.collection('reservations').doc(b.dataset.finishTrip).update({statut:'terminee'});
+      const resId = b.dataset.finishTrip;
+      const res = state.reservations.find(x=>x.id===resId);
+      const part = Number((res && res.montantChauffeur) || 0);
+      // On marque le trajet termine ET on cree la ligne de gain du chauffeur
+      // dans son portefeuille (paiementChauffeurVerse evite tout double credit).
+      const dejaVerse = !!(res && res.paiementChauffeurVerse);
+      await db.collection('reservations').doc(resId).update(
+        dejaVerse || part<=0
+          ? {statut:'terminee', termineAt: firebase.firestore.FieldValue.serverTimestamp()}
+          : {statut:'terminee', paiementChauffeurVerse:true, termineAt: firebase.firestore.FieldValue.serverTimestamp()}
+      );
+      if(!dejaVerse && part>0){
+        try{
+          await db.collection('users').doc(state.user.uid).update({
+            solde: firebase.firestore.FieldValue.increment(part)
+          });
+          showToast(`Trajet terminé. +${part.toLocaleString('fr-FR')} FCFA ajoutés à ton portefeuille.`);
+          return;
+        }catch(err){ console.error('Erreur crédit chauffeur', err); }
+      }
       showToast("Trajet marqué terminé.");
+    };
+  });
+
+  /* ---- Chauffeur : demande de retrait vers Wave (validée par l'admin) ---- */
+  const retraitForm = document.getElementById('retraitForm');
+  if(retraitForm) retraitForm.onsubmit = async (e)=>{
+    e.preventDefault();
+    const montant = Number(document.getElementById('rt-montant').value)||0;
+    const numeroWave = document.getElementById('rt-wave').value.trim();
+    const solde = Number((state.profile && state.profile.solde) || 0);
+    const bloque = state.myRetraits.filter(r=>r.statut==='en_attente').reduce((s,r)=>s+Number(r.montant||0),0);
+    if(montant < 1000){ showToast("Le retrait minimum est de 1 000 FCFA."); return; }
+    if(!numeroWave){ showToast("Indique le numéro Wave à créditer."); return; }
+    if(montant > solde - bloque){ showToast("Montant supérieur à ton solde disponible."); return; }
+    const btn = document.getElementById('retraitSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Envoi...';
+    try{
+      const docRef = await db.collection('retraits').add({
+        chauffeurId: state.user.uid,
+        chauffeurNom: (state.profile && state.profile.nom) || '',
+        chauffeurTelephone: (state.profile && state.profile.telephone) || null,
+        chauffeurEmail: (state.profile && state.profile.email) || null,
+        montant, numeroWave,
+        statut: 'en_attente',
+        motifRefus: null,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await pushNotification(
+        state.user.uid,
+        'Demande de retrait envoyée',
+        `Ta demande de retrait de ${montant.toLocaleString('fr-FR')} FCFA vers le numéro Wave ${numeroWave} a bien été enregistrée (réf. ${refCourt('RET', docRef.id)}). Elle est en attente de validation par l'administrateur.`,
+        {email: (state.profile && state.profile.email) || null, type:'retrait_envoye', refId: docRef.id}
+      );
+      showToast("Demande de retrait envoyée. L'admin va la valider et créditer ton compte Wave.");
+      document.getElementById('rt-montant').value = '';
+    }catch(err){
+      showToast("Erreur : " + (err.message || "impossible d'envoyer la demande."));
+    }
+    btn.disabled = false; btn.textContent = 'Demander le retrait';
+  };
+
+  /* ---- Admin : valider (débite) / marquer payé / refuser un retrait ----
+     Le workflow se fait en 2 etapes distinctes, chacune avec sa propre
+     notification (in-app + email + proposition WhatsApp) envoyee au chauffeur :
+       1) en_attente -> approuve : le solde du chauffeur est debite tout de
+          suite (fonds reserves), notif "Retrait approuvé".
+       2) approuve -> paye : une fois l'argent reellement envoye depuis le
+          compte Wave de l'admin, notif "Retrait payé sur Wave".
+     Le refus (a n'importe quel moment avant paiement) declenche sa propre
+     notif "Retrait refusé" avec motif, et ne debite jamais le solde. */
+  document.querySelectorAll('[data-approve-retrait]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.approveRetrait;
+      const r = state.retraits.find(x=>x.id===id);
+      if(!r) return;
+      if(!confirm(`Valider le retrait de ${Number(r.montant||0).toLocaleString('fr-FR')} FCFA vers ${r.numeroWave} ?\nLe solde du chauffeur sera débité immédiatement. Tu devras ensuite l'envoyer depuis Wave et marquer la demande comme payée.`)) return;
+      b.disabled = true; b.textContent = 'Validation...';
+      try{
+        const userRef = db.collection('users').doc(r.chauffeurId);
+        const retraitRef = db.collection('retraits').doc(id);
+        await db.runTransaction(async (tx)=>{
+          const uDoc = await tx.get(userRef);
+          const rDoc = await tx.get(retraitRef);
+          if(!uDoc.exists) throw new Error("Chauffeur introuvable.");
+          if(!rDoc.exists || rDoc.data().statut !== 'en_attente') throw new Error("Demande déjà traitée.");
+          const solde = Number(uDoc.data().solde||0);
+          const montant = Number(rDoc.data().montant||0);
+          if(montant > solde) throw new Error("Solde du chauffeur insuffisant.");
+          tx.update(userRef, {solde: solde - montant});
+          tx.update(retraitRef, {statut:'approuve', approuveAt: firebase.firestore.FieldValue.serverTimestamp(), approuvePar: state.user.uid});
+        });
+        const msgOk = `Ta demande de retrait de ${Number(r.montant||0).toLocaleString('fr-FR')} FCFA (réf. ${refCourt('RET', id)}) a été approuvée par l'administrateur. Le virement vers ton compte Wave ${r.numeroWave} est en cours et sera confirmé sous peu.`;
+        await pushNotification(r.chauffeurId, 'Retrait approuvé', msgOk,
+          {email: r.chauffeurEmail || null, type:'retrait_approuve', refId: id});
+        if(r.chauffeurTelephone && confirm("Prévenir le chauffeur sur WhatsApp maintenant ?")){
+          ouvrirWhatsApp(r.chauffeurTelephone, msgOk);
+        }
+        showToast(`Retrait validé et débité. Envoie maintenant ${Number(r.montant||0).toLocaleString('fr-FR')} FCFA sur ${r.numeroWave} depuis Wave, puis marque-le comme payé.`);
+      }catch(err){
+        showToast("Erreur : " + (err.message || "validation impossible."));
+        b.disabled = false; b.textContent = '✅ Valider et débiter';
+      }
+    };
+  });
+  document.querySelectorAll('[data-marquer-paye-retrait]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.marquerPayeRetrait;
+      const r = state.retraits.find(x=>x.id===id);
+      if(!r) return;
+      if(!confirm(`Confirmer que les ${Number(r.montant||0).toLocaleString('fr-FR')} FCFA ont bien été envoyés sur Wave (${r.numeroWave}) ?`)) return;
+      b.disabled = true; b.textContent = 'Envoi...';
+      try{
+        await db.collection('retraits').doc(id).update({
+          statut:'paye', payeAt: firebase.firestore.FieldValue.serverTimestamp(), payePar: state.user.uid
+        });
+        const msgOk = `Bonne nouvelle ! Ton retrait de ${Number(r.montant||0).toLocaleString('fr-FR')} FCFA (réf. ${refCourt('RET', id)}) a été payé sur ton compte Wave ${r.numeroWave}. Le montant arrive dans quelques minutes.`;
+        await pushNotification(r.chauffeurId, 'Retrait payé sur Wave', msgOk,
+          {email: r.chauffeurEmail || null, type:'retrait_paye', refId: id});
+        if(r.chauffeurTelephone && confirm("Prévenir le chauffeur sur WhatsApp maintenant ?")){
+          ouvrirWhatsApp(r.chauffeurTelephone, msgOk);
+        }
+        showToast("Retrait marqué comme payé.");
+      }catch(err){
+        showToast("Erreur : " + (err.message || "action impossible."));
+        b.disabled = false; b.textContent = '💸 Marquer payé sur Wave';
+      }
+    };
+  });
+  document.querySelectorAll('[data-refuse-retrait]').forEach(b=>{
+    b.onclick = async ()=>{
+      const motif = prompt("Motif du refus (visible par le chauffeur) :", "");
+      if(motif === null) return;
+      const rid = b.dataset.refuseRetrait;
+      const rr = state.retraits.find(x=>x.id===rid);
+      try{
+        await db.collection('retraits').doc(rid).update({
+          statut:'refuse', motifRefus: motif || 'Non précisé',
+          traiteAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        if(rr){
+          const msgKo = `Ta demande de retrait de ${Number(rr.montant||0).toLocaleString('fr-FR')} FCFA (réf. ${refCourt('RET', rid)}) a été refusée. Motif : ${motif || 'Non précisé'}. Ton solde n'a pas été débité.`;
+          await pushNotification(rr.chauffeurId, 'Retrait refusé', msgKo,
+            {email: rr.chauffeurEmail || null, type:'retrait_refuse', refId: rid});
+          if(rr.chauffeurTelephone && confirm("Prévenir le chauffeur sur WhatsApp maintenant ?")){
+            ouvrirWhatsApp(rr.chauffeurTelephone, msgKo);
+          }
+        }
+        showToast("Demande de retrait refusée.");
+      }catch(err){ showToast("Erreur : " + (err.message || "action impossible.")); }
     };
   });
 
   /* ---- Billet QR client : affichage ---- */
   document.querySelectorAll('[data-show-qr]').forEach(b=>{
     b.onclick = ()=>{
-      openQrDisplayModal(b.dataset.showQr, b.dataset.qrToken);
+      const res = state.reservations.find(x=>x.id===b.dataset.showQr);
+      openQrDisplayModal(b.dataset.showQr, b.dataset.qrToken, res);
     };
   });
 
   /* ---- Billet QR chauffeur : scan camera pour valider l'embarquement ---- */
   document.querySelectorAll('[data-scan-qr]').forEach(b=>{
     b.onclick = ()=>{
-      openQrScanModal(b.dataset.scanQr, b.dataset.scanToken);
+      const res = state.reservations.find(x=>x.id===b.dataset.scanQr);
+      openQrScanModal(b.dataset.scanQr, b.dataset.scanToken, res);
     };
   });
 }
@@ -2482,16 +2970,30 @@ function bindPanelEvents(){
 /* =========================================================
    Modale d'affichage du billet QR (cote client)
    ========================================================= */
-function openQrDisplayModal(resId, token){
+function openQrDisplayModal(resId, token, res){
   const old = document.getElementById('qrModalOverlay');
   if(old) old.remove();
   const overlay = document.createElement('div');
   overlay.id = 'qrModalOverlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  const dateFmt = res && res.dateEvenement
+    ? new Date(res.dateEvenement+'T00:00:00').toLocaleDateString('fr-FR',{day:'2-digit',month:'short',year:'numeric'}) + (res.heureEvenement ? ` à ${esc(res.heureEvenement)}` : '')
+    : '—';
+  const receiptRows = res ? `
+      <div style="text-align:left;border-top:1px dashed #D9D2BE;border-bottom:1px dashed #D9D2BE;padding:12px 0;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;"><span style="color:var(--ink-soft);">Trajet</span><b>${esc(res.lieuDepart)} → ${esc(res.lieuArrivee)}</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;"><span style="color:var(--ink-soft);">Date</span><b>${dateFmt}</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;"><span style="color:var(--ink-soft);">Passagers</span><b>${esc(res.nbPassagers)}</b></div>
+        ${res.chauffeurNom ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;"><span style="color:var(--ink-soft);">Chauffeur</span><b>${esc(res.chauffeurNom)}</b></div>` : ''}
+        ${res.busImmat ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;"><span style="color:var(--ink-soft);">Bus</span><b class="mono">${esc(res.busImmat)}</b></div>` : ''}
+        ${res.prix ? `<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;"><span style="color:var(--ink-soft);">Prix</span><b>${Number(res.prix).toLocaleString('fr-FR')} FCFA</b></div>` : ''}
+        ${res.prix ? `<div style="display:flex;justify-content:space-between;font-size:13px;"><span style="color:var(--ink-soft);">Paiement</span><b>${res.paiementStatut==='paye'?'Payé':'Non payé'}</b></div>` : ''}
+      </div>` : '';
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:16px;padding:26px;max-width:320px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35);">
-      <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">Ton billet Teranga Trans</div>
+      <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">🎫 Ton billet / reçu Teranga Trans</div>
       <div style="font-size:12px;color:var(--ink-soft);margin-bottom:14px;">Montre ce QR au chauffeur à la montée dans le bus.</div>
+      ${receiptRows}
       <div id="qrCanvasHolder" style="display:flex;justify-content:center;margin-bottom:14px;"></div>
       <div style="font-size:11px;color:var(--ink-soft);margin-bottom:14px;">Réf. #${esc(resId.slice(0,6).toUpperCase())}</div>
       <button class="btn-sm btn-ghost" id="qrModalCloseBtn" style="width:100%;">Fermer</button>
@@ -2509,7 +3011,7 @@ function openQrDisplayModal(resId, token){
    d'UNE reservation precise : le QR scanne doit correspondre a
    la fois au resId et au token de CETTE reservation.
    ========================================================= */
-function openQrScanModal(resId, expectedToken){
+function openQrScanModal(resId, expectedToken, res){
   const old = document.getElementById('qrScanOverlay');
   if(old) old.remove();
   const overlay = document.createElement('div');
@@ -2519,6 +3021,7 @@ function openQrScanModal(resId, expectedToken){
     <div style="background:#fff;border-radius:16px;padding:20px;max-width:340px;width:100%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35);">
       <div style="font-weight:700;font-size:15px;color:var(--night);margin-bottom:4px;">Scanner le billet du client</div>
       <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;">Vise le QR affiché sur le téléphone du passager.</div>
+      ${res ? `<div style="background:#FBF1DE;border:1px solid var(--gold);border-radius:10px;padding:8px 10px;margin-bottom:12px;font-size:13px;color:var(--night);">👥 Vérifie qu'il y a bien <b>${esc(res.nbPassagers)} passager(s)</b> avant de valider</div>` : ''}
       <div style="position:relative;border-radius:12px;overflow:hidden;background:#000;">
         <video id="qrScanVideo" style="width:100%;display:block;" playsinline muted></video>
       </div>
@@ -2882,6 +3385,13 @@ function attachListeners(){
       state.buses = snap.docs.map(d=>({id:d.id, ...d.data()}));
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute buses:', err)));
+    unsubs.push(db.collection('retraits').onSnapshot(snap=>{
+      state.retraits = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute retraits:', err)));
     unsubs.push(db.collection('users').onSnapshot(snap=>{
       state.users = snap.docs.map(d=>({id:d.id, ...d.data()}));
       state.drivers = state.users.filter(u=>u.role==='chauffeur');
@@ -2934,6 +3444,15 @@ function attachListeners(){
       console.error('Erreur écoute demandes ouvertes:', err);
       showToast("Impossible de charger les demandes clients : " + (err && err.code==='permission-denied' ? "accès refusé (vérifie firestore.rules)" : (err && err.message ? err.message : 'erreur')));
     }));
+
+    // Ses propres demandes de retrait (pour suivre validation/refus admin).
+    unsubs.push(db.collection('retraits').where('chauffeurId','==', uid).onSnapshot(snap=>{
+      state.myRetraits = snap.docs.map(d=>{
+        const data = d.data();
+        return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
+      });
+      if(document.getElementById('panelHost')) renderPanel();
+    }, err=>console.error('Erreur écoute mes retraits:', err)));
 
     // Ses propres offres envoyees (tous statuts, pour voir acceptees/refusees).
     unsubs.push(db.collection('propositions').where('chauffeurId','==', uid).onSnapshot(snap=>{
