@@ -2897,7 +2897,10 @@ function attachListeners(){
       state.knownOpenRequestIds = new Set(next.map(r=>r.id));
       state.openRequests = next;
       if(document.getElementById('panelHost')) renderPanel();
-    }, err=>console.error('Erreur écoute demandes ouvertes:', err)));
+    }, err=>{
+      console.error('Erreur écoute demandes ouvertes:', err);
+      showToast("Impossible de charger les demandes clients : " + (err && err.code==='permission-denied' ? "accès refusé (vérifie firestore.rules)" : (err && err.message ? err.message : 'erreur')));
+    }));
 
     // Ses propres offres envoyees (tous statuts, pour voir acceptees/refusees).
     unsubs.push(db.collection('propositions').where('chauffeurId','==', uid).onSnapshot(snap=>{
