@@ -554,6 +554,7 @@ let state = {
   knownStatuts:{}, // pour detecter les changements de statut et notifier
   // ---- Marche des propositions chauffeur <-> client ----
   openRequests:[],      // (chauffeur) demandes clients non encore assignees, ouvertes aux offres
+  knownOpenRequestIds:null, // (chauffeur) ids deja vus, pour notifier uniquement les nouvelles demandes
   propositions:[],      // (client) offres recues sur ses propres demandes
   myPropositions:[],    // (chauffeur) ses propres offres envoyees, tous statuts
   proposingFor:null,    // id de la reservation pour laquelle le chauffeur remplit son offre
@@ -1628,6 +1629,7 @@ function chauffeurOffreCard(r){
         <span><b>${esc(r.nbPassagers)}</b> passagers</span>
       </div>
       ${r.equipementsSouhaites && r.equipementsSouhaites.length ? `<div style="margin-top:8px;"><span style="font-size:11.5px;color:var(--ink-soft);margin-right:6px;">Souhaités:</span>${equipBadges(r.equipementsSouhaites)}</div>` : ``}
+      ${r.busImmat ? `<div style="margin-top:8px;font-size:12px;color:var(--ink-soft);">🚌 Bus suggéré par l'admin : <b class="mono">${esc(r.busImmat)}</b></div>` : ``}
       ${r.notes ? `<div style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);font-style:italic;">"${esc(r.notes)}"</div>` : ``}
       ${box}
     </div>
@@ -1676,14 +1678,24 @@ function ticketCard(r, mode){
   if(mode==='admin' && st==='en_attente'){
     actions = `
     <div class="assign-box">
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:10px;">
+        Cette demande est visible par tous les chauffeurs, qui peuvent directement envoyer une proposition de prix au client — ce n'est pas à toi de la confirmer. Tu peux juste, si tu veux, lui suggérer un bus ci-dessous (facultatif) ou l'assigner toi-même à un chauffeur précis.
+      </div>
       <div class="grid-2">
         <div class="field">
-          <label>Assigner un bus</label>
+          <label>Suggérer un bus (facultatif)</label>
           <select data-assign-bus="${r.id}">
-            <option value="">Choisir un bus</option>
-            ${state.buses.map(b=>`<option value="${b.id}">${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
+            <option value="">Aucun bus suggéré</option>
+            ${state.buses.map(b=>`<option value="${b.id}" ${r.busId===b.id?'selected':''}>${esc(b.immatriculation)} — ${esc(b.modele)} (${esc(b.capacite)} pl.)${equipIconsText(b.equipements)}</option>`).join('')}
           </select>
         </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn-sm btn-ghost" data-suggest-bus="${r.id}">Enregistrer le bus suggéré</button>
+      </div>
+      <div style="height:1px;background:rgba(0,0,0,.08);margin:14px 0;"></div>
+      <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;">Ou, si tu préfères l'assigner toi-même directement à un chauffeur (facultatif — le chauffeur devra quand même accepter) :</div>
+      <div class="grid-2">
         <div class="field">
           <label>Assigner un chauffeur</label>
           <select data-assign-driver="${r.id}">
@@ -1691,14 +1703,14 @@ function ticketCard(r, mode){
             ${state.drivers.filter(d=>d.status==='active').map(d=>`<option value="${d.id}">${esc(d.nom)}</option>`).join('')}
           </select>
         </div>
-      </div>
-      <div class="field" style="margin-top:8px;">
-        <label>Prix convenu (FCFA)</label>
-        <input type="number" min="0" data-price="${r.id}" placeholder="Ex: 75000">
+        <div class="field">
+          <label>Prix convenu (FCFA)</label>
+          <input type="number" min="0" data-price="${r.id}" placeholder="Ex: 75000">
+        </div>
       </div>
       <div class="btn-row">
-        <button class="btn-sm btn-confirm" data-confirm-res="${r.id}">Confirmer la réservation</button>
-        <button class="btn-sm btn-red" data-refuse-res="${r.id}">Refuser</button>
+        <button class="btn-sm btn-confirm" data-confirm-res="${r.id}">Assigner directement à ce chauffeur</button>
+        <button class="btn-sm btn-red" data-refuse-res="${r.id}">Refuser la demande</button>
       </div>
     </div>`;
   }
@@ -1947,21 +1959,42 @@ function bindPanelEvents(){
     };
   });
 
+  // Suggerer un bus (facultatif) : n'assigne pas de chauffeur et ne
+  // confirme rien, la demande reste 'en_attente' et donc toujours visible
+  // par tous les chauffeurs dans le marché des demandes ouvertes.
+  document.querySelectorAll('[data-suggest-bus]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.suggestBus;
+      const busSel = document.querySelector(`[data-assign-bus="${id}"]`);
+      const bus = busSel && busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
+      try{
+        await db.collection('reservations').doc(id).update({
+          busId: bus ? bus.id : null,
+          busImmat: bus ? bus.immatriculation : null,
+          busEquipements: bus ? (bus.equipements || []) : null
+        });
+        showToast(bus ? "Bus suggéré enregistré." : "Suggestion de bus retirée.");
+      }catch(e){ showToast("Erreur : " + e.message); }
+    };
+  });
+
   document.querySelectorAll('[data-confirm-res]').forEach(b=>{
     b.onclick = async ()=>{
       const id = b.dataset.confirmRes;
       const busSel = document.querySelector(`[data-assign-bus="${id}"]`);
       const drvSel = document.querySelector(`[data-assign-driver="${id}"]`);
       const priceInp = document.querySelector(`[data-price="${id}"]`);
-      if(!busSel.value || !drvSel.value){
-        showToast("Choisis un bus et un chauffeur avant de confirmer.");
+      if(!drvSel.value){
+        showToast("Choisis un chauffeur avant de l'assigner directement.");
         return;
       }
-      const bus = state.buses.find(x=>x.id===busSel.value);
+      // Le bus est facultatif : l'admin peut assigner un chauffeur sans
+      // preciser de bus, ou laisser le bus deja suggere plus haut.
+      const bus = busSel.value ? state.buses.find(x=>x.id===busSel.value) : null;
       const drv = state.drivers.find(x=>x.id===drvSel.value);
-      const conflict = findBookingConflict(state.reservations.find(x=>x.id===id).dateEvenement, bus.id, drv.id, id);
+      const conflict = findBookingConflict(state.reservations.find(x=>x.id===id).dateEvenement, bus ? bus.id : null, drv.id, id);
       if(conflict){
-        showToast(`Conflit : ${conflict.busId===bus.id?'ce bus':'ce chauffeur'} est déjà assigné le même jour.`);
+        showToast(`Conflit : ${bus && conflict.busId===bus.id?'ce bus':'ce chauffeur'} est déjà assigné le même jour.`);
         return;
       }
       const prixVal = priceInp.value ? Number(priceInp.value) : null;
@@ -1970,7 +2003,7 @@ function bindPanelEvents(){
         // Le chauffeur doit d'abord accepter avant que ce soit vraiment confirmé.
         statut:'attente_chauffeur',
         expiresAt: Date.now() + DRIVER_ACCEPT_TIMEOUT_MS,
-        busId: bus.id, busImmat: bus.immatriculation, busEquipements: bus.equipements || [],
+        busId: bus ? bus.id : null, busImmat: bus ? bus.immatriculation : null, busEquipements: bus ? (bus.equipements || []) : null,
         chauffeurId: drv.id, chauffeurNom: drv.nom, chauffeurTelephone: drv.telephone || '',
         prix: prixVal,
         commission: split.commission,
@@ -2838,10 +2871,31 @@ function attachListeners(){
     // ATTENTION : ceci demande d'ouvrir firestore.rules pour permettre a
     // tout chauffeur authentifie de lire les reservations statut=='en_attente'.
     unsubs.push(db.collection('reservations').where('statut','==','en_attente').onSnapshot(snap=>{
-      state.openRequests = snap.docs.map(d=>{
+      const next = snap.docs.map(d=>{
         const data = d.data();
         return {id:d.id, ...data, _ts: data.createdAt ? data.createdAt.toMillis() : Date.now()};
       });
+      // Notifie le chauffeur des NOUVELLES demandes clients (celles qu'il
+      // n'avait pas encore vues), pour qu'il puisse aller consulter la
+      // demande et envoyer une proposition de prix sans avoir a rafraichir
+      // l'onglet en permanence. On ignore le tout premier chargement (sinon
+      // toutes les demandes deja en attente declencheraient une notif d'un
+      // coup a la connexion).
+      const isFirstLoad = state.knownOpenRequestIds === null;
+      const knownIds = state.knownOpenRequestIds || new Set();
+      if(!isFirstLoad){
+        next.forEach(r=>{
+          if(!knownIds.has(r.id)){
+            const msg = `Nouvelle demande : ${r.lieuDepart||''} → ${r.lieuArrivee||''}${r.dateEvenement?` le ${r.dateEvenement}`:''}`;
+            showToast(msg);
+            if(window.Notification && Notification.permission === 'granted'){
+              new Notification('Teranga Trans', {body: msg});
+            }
+          }
+        });
+      }
+      state.knownOpenRequestIds = new Set(next.map(r=>r.id));
+      state.openRequests = next;
       if(document.getElementById('panelHost')) renderPanel();
     }, err=>console.error('Erreur écoute demandes ouvertes:', err)));
 
@@ -2911,7 +2965,7 @@ function attachListeners(){
 auth.onAuthStateChanged(async (user)=>{
   if(!user){
     state.user = null; state.profile = null; state.authLoading = false; clearListeners();
-    state.openRequests = []; state.propositions = []; state.myPropositions = []; state.proposingFor = null;
+    state.openRequests = []; state.knownOpenRequestIds = null; state.propositions = []; state.myPropositions = []; state.proposingFor = null;
     state.trajetsProposes = []; state.mesTrajetsProposes = []; state.clientTrajetSearch = ''; state.editingTrajet = null;
     state.rechargements = [];
     render();
