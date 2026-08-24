@@ -771,7 +771,7 @@ function bindAuthEvents(){
       nom, telephone: tel, email: email || null, role: finalRole,
       status: finalStatus,
       numeroPermis: finalRole==='chauffeur' ? permis : null,
-      solde: finalRole==='client' ? 0 : null,
+      solde: finalRole==='client' ? 10000 : null,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
     try{
