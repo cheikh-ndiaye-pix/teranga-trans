@@ -334,6 +334,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <!-- Scan du QR via la camera du chauffeur (embarquement) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qr-scanner/1.4.2/qr-scanner.umd.min.js"></script>
+<!-- Carte du suivi en direct (Leaflet + tuiles OpenStreetMap) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 
 <script>
 /* =========================================================
@@ -428,6 +431,22 @@ function calcPropositionCommission(prixPropose){
 // un chauffeur assigne/confirme (a la place du numero prive du chauffeur,
 // que seul l'admin doit voir).
 const TERANGA_SERVICE_PHONE = "77 860 35 51";
+// PENALITE D'ANNULATION SANS MOTIF
+// Si un client annule une reservation deja confirmee (le chauffeur s'est
+// deja engage / deplace), une partie du paiement est retenue pour
+// dedommager le chauffeur. Le taux ci-dessous est le MAXIMUM applique :
+// le montant final est toujours arbitre et valide par l'admin.
+const CANCEL_PENALTY_RATE = 0.20; // 20% du prix du trajet
+const CANCEL_PENALTY_MIN_FCFA = 1000;
+function calcCancelPenalty(prix){
+  const p = Number(prix)||0;
+  if(!p) return 0;
+  return Math.min(p, Math.max(CANCEL_PENALTY_MIN_FCFA, Math.round(p * CANCEL_PENALTY_RATE)));
+}
+const CANCEL_PENALTY_NOTICE = `\u26a0\ufe0f En cas d'annulation sans motif valable apr\u00e8s confirmation (le chauffeur s'est d\u00e9j\u00e0 d\u00e9plac\u00e9), une partie du paiement est retenue \u2014 jusqu'\u00e0 ${(CANCEL_PENALTY_RATE*100).toFixed(0)}% du prix (min. ${CANCEL_PENALTY_MIN_FCFA.toLocaleString('fr-FR')} FCFA). Le montant exact est d\u00e9cid\u00e9 par l'administration.`;
+function penaltyNoticeHtml(extra){
+  return `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#FDF3E3;border:1px solid var(--gold);font-size:11.5px;line-height:1.5;color:var(--night);">${CANCEL_PENALTY_NOTICE}${extra?` ${extra}`:''}</div>`;
+}
 function calcSplit(prix){
   const p = Number(prix)||0;
   const commission = Math.round(p * COMMISSION_RATE);
@@ -1181,6 +1200,7 @@ function renderPropositionsForClient(r){
         </div>
       </div>`;
     }).join('')}
+    ${penaltyNoticeHtml()}
   </div>`;
 }
 
@@ -1837,6 +1857,7 @@ function chauffeurOffreCard(r){
         <input type="text" id="propMsg-${r.id}" placeholder="Ex: dispo dès 8h, bus climatisé...">
       </div>
       <div style="font-size:11.5px;color:var(--ink-soft);margin-bottom:8px;">+ commission Teranga Trans (min. ${PROPOSITION_COMMISSION_MIN_FCFA} FCFA ou ${(PROPOSITION_COMMISSION_RATE*100).toFixed(0)}% du prix, le plus élevé des deux) ajoutée automatiquement au prix affiché au client.</div>
+      ${penaltyNoticeHtml("Si le client annule sans motif apr\u00e8s ton d\u00e9placement, cette retenue te sera revers\u00e9e apr\u00e8s validation de l'admin.")}
       <div class="btn-row">
         <button class="btn-sm btn-confirm" data-submit-proposition="${r.id}">Envoyer mon offre</button>
         <button class="btn-sm btn-ghost" data-cancel-propose-form="${r.id}">Annuler</button>
@@ -2090,7 +2111,8 @@ function ticketCard(r, mode){
     </div>`;
   }
   if(mode==='chauffeur' && st==='attente_chauffeur'){
-    actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-accept-trajet="${r.id}">✅ Accepter le trajet</button><button class="btn-sm btn-red" data-reject-trajet="${r.id}">❌ Refuser</button></div>`;
+    actions = `<div class="btn-row"><button class="btn-sm btn-confirm" data-accept-trajet="${r.id}">✅ Accepter le trajet</button><button class="btn-sm btn-red" data-reject-trajet="${r.id}">❌ Refuser</button></div>`
+      + penaltyNoticeHtml("Si le client annule sans motif apr\u00e8s ton d\u00e9placement, cette retenue te sera revers\u00e9e apr\u00e8s validation de l'admin.");
   }
   if(mode==='chauffeur' && st==='confirmee'){
     // Le trajet ne peut démarrer qu'APRÈS avoir scanné le billet du client
@@ -2116,10 +2138,12 @@ function ticketCard(r, mode){
       : `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-confirm" data-show-qr="${r.id}" data-qr-token="${esc(r.qrToken)}">🎫 Voir mon billet QR</button></div>`;
   }
   if(mode==='client' && (st==='confirmee' || st==='en_route')){
-    actions += `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-track-res="${r.id}">🗺️ Voir la position du chauffeur</button></div>`;
+    actions += `<div data-live-eta="${r.id}" style="margin-top:8px;font-size:12.5px;color:var(--ink-soft);">📍 Recherche de la position du chauffeur…</div>`
+      + `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-confirm" data-track-res="${r.id}">🗺️ Suivre le chauffeur en direct</button></div>`;
   }
   if(mode==='client' && (st==='en_attente' || st==='confirmee')){
-    actions += `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-cancel-res="${r.id}">Annuler la réservation</button></div>`;
+    actions += `<div class="btn-row" style="margin-top:8px;"><button class="btn-sm btn-ghost" data-cancel-res="${r.id}" data-cancel-prix="${Number(r.prix||0)}" data-cancel-engage="${(st==='confirmee' && (r.chauffeurId||r.busId)) ? '1' : '0'}">Annuler la réservation</button></div>`
+      + (st==='confirmee' ? penaltyNoticeHtml() : '');
   }
   if(mode==='client' && st==='terminee' && !r.note){
     actions = `
@@ -2169,6 +2193,14 @@ function ticketCard(r, mode){
         ${r.chauffeurNom && mode==='client' ? `<span>Contact chauffeur (service Teranga): <b>${esc(TERANGA_SERVICE_PHONE)}</b></span>` : ``}
         ${r.prix ? `<span>Prix: <b>${esc(r.prix)} FCFA</b></span>` : ``}
       </div>
+      ${mode==='admin' && r.penaliteStatut==='a_valider' ? `<div class="assign-box" style="margin-top:8px;">
+        <div style="font-size:12px;font-weight:700;color:var(--red);">Annulation client ${r.motifAnnulation?`— motif : "${esc(r.motifAnnulation)}"`:`— <b>sans motif</b>`}</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin:4px 0 6px;">Retenue proposée : <b>${Number(r.penaliteProposee||0).toLocaleString('fr-FR')} FCFA</b></div>
+        <div class="field"><label>Retenue à appliquer (FCFA)</label><input type="number" min="0" data-set-penalite="${r.id}" value="${Number(r.penaliteProposee||0)}"></div>
+        <div class="btn-row"><button class="btn-sm btn-confirm" data-save-penalite="${r.id}">Valider la retenue</button></div>
+      </div>` : ``}
+      ${mode!=='admin' && r.penaliteStatut==='validee' ? `<div style="margin-top:6px;font-size:12px;color:var(--red);">Retenue pour annulation : <b>${Number(r.penaliteRetenue||0).toLocaleString('fr-FR')} FCFA</b></div>` : ``}
+      ${mode==='admin' && r.penaliteStatut==='validee' ? `<div style="margin-top:6px;font-size:12px;color:var(--red);">Retenue validée : <b>${Number(r.penaliteRetenue||0).toLocaleString('fr-FR')} FCFA</b></div>` : ``}
       ${r.prix && mode==='admin' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Commission Teranga: <b>${esc(r.commission||0)} FCFA</b> • Part chauffeur/propriétaire: <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
       ${r.prix && mode==='chauffeur' ? `<div style="margin-top:4px;font-size:12px;color:var(--ink-soft);">Ta part (après commission): <b>${esc(r.montantChauffeur||0)} FCFA</b></div>` : ``}
       ${r.busEquipements && r.busEquipements.length ? `<div style="margin-top:8px;">${equipBadges(r.busEquipements)}</div>` : (r.equipementsSouhaites && r.equipementsSouhaites.length ? `<div style="margin-top:8px;"><span style="font-size:11.5px;color:var(--ink-soft);margin-right:6px;">Souhaités:</span>${equipBadges(r.equipementsSouhaites)}</div>` : ``)}
@@ -2748,11 +2780,35 @@ function bindPanelEvents(){
       showToast("Réservation mise à jour.");
     };
   });
+  document.querySelectorAll('[data-save-penalite]').forEach(b=>{
+    b.onclick = async ()=>{
+      const id = b.dataset.savePenalite;
+      const el = document.querySelector(`[data-set-penalite="${id}"]`);
+      const val = Math.max(0, Number(el ? el.value : 0) || 0);
+      await db.collection('reservations').doc(id).update({penaliteRetenue: val, penaliteStatut: 'validee'});
+      showToast("Retenue validée : " + val.toLocaleString('fr-FR') + " FCFA.");
+    };
+  });
   document.querySelectorAll('[data-cancel-res]').forEach(b=>{
     b.onclick = async ()=>{
-      if(!confirm("Annuler cette réservation ?")) return;
-      await db.collection('reservations').doc(b.dataset.cancelRes).update({statut:'annulee'});
-      showToast("Réservation annulée.");
+      const engage = b.dataset.cancelEngage === '1';
+      const prixRes = Number(b.dataset.cancelPrix || 0);
+      const penalite = engage ? calcCancelPenalty(prixRes) : 0;
+      const msg = engage
+        ? `Annuler cette réservation ?\n\nLe chauffeur s'est déjà engagé. Sans motif valable, une retenue pouvant aller jusqu'à ${penalite.toLocaleString('fr-FR')} FCFA (${(CANCEL_PENALTY_RATE*100).toFixed(0)}%) sera appliquée sur ton paiement. Le montant final est décidé par l'administration.`
+        : "Annuler cette réservation ?";
+      if(!confirm(msg)) return;
+      const motif = engage ? (prompt("Motif de l'annulation (laisse vide si aucun motif) :", "") || "").trim() : "";
+      await db.collection('reservations').doc(b.dataset.cancelRes).update({
+        statut:'annulee',
+        annuleeLe: Date.now(),
+        annuleePar: 'client',
+        motifAnnulation: motif || null,
+        penaliteProposee: penalite,
+        penaliteRetenue: null,
+        penaliteStatut: engage ? 'a_valider' : 'aucune'
+      });
+      showToast(engage ? "Réservation annulée — retenue en attente de validation de l'admin." : "Réservation annulée.");
     };
   });
 
@@ -3106,6 +3162,37 @@ let trackMap = null;
 let trackMarkers = {};
 let trackLine = null;
 let trackTick = null;
+let trackTrail = null;          // trainee des dernieres positions du bus
+let trackTrailPts = [];
+let trackRoute = null;          // trace routiere bus -> client
+let trackRouteFetchedAt = 0;
+let trackRouteInfo = null;      // {km, min} calcules sur la vraie route
+const TRACK_ROUTE_REFRESH_MS = 30000;
+
+/* Itineraire routier reel (OSRM public). Si indisponible, on retombe
+   sur la distance a vol d'oiseau deja calculee. */
+async function fetchRoute(bus, cli){
+  if(!bus || !cli) return null;
+  if(Date.now() - trackRouteFetchedAt < TRACK_ROUTE_REFRESH_MS) return trackRouteInfo;
+  trackRouteFetchedAt = Date.now();
+  try{
+    const url = `https://router.project-osrm.org/route/v1/driving/${bus.lng},${bus.lat};${cli.lng},${cli.lat}?overview=full&geometries=geojson`;
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('route');
+    const j = await r.json();
+    const route = j.routes && j.routes[0];
+    if(!route) throw new Error('route');
+    trackRouteInfo = {
+      km: route.distance / 1000,
+      min: Math.max(1, Math.round(route.duration / 60)),
+      coords: route.geometry.coordinates.map(c=>[c[1], c[0]])
+    };
+    return trackRouteInfo;
+  }catch(e){
+    trackRouteInfo = null;
+    return null;
+  }
+}
 
 function trackRole(){
   const r = state.profile && state.profile.role;
@@ -3231,7 +3318,8 @@ function openTrackingModal(resId){
     if(trackUnsub){ trackUnsub(); trackUnsub = null; }
     if(trackTick){ clearInterval(trackTick); trackTick = null; }
     if(trackMap){ trackMap.remove(); trackMap = null; }
-    trackMarkers = {}; trackLine = null;
+    trackMarkers = {}; trackLine = null; trackTrail = null; trackTrailPts = [];
+    trackRoute = null; trackRouteInfo = null; trackRouteFetchedAt = 0;
     syncBackgroundSharing();
   };
   overlay.onclick = e => { if(e.target === overlay) close(); };
@@ -3278,8 +3366,11 @@ function openTrackingModal(resId){
     const etaEl = document.getElementById('trackEta');
     const infoEl = document.getElementById('trackInfo');
     if(!distEl) return;
-    distEl.textContent = distText(km);
-    etaEl.textContent = etaText(km);
+    const ri = trackRouteInfo;
+    const kmAff = ri ? ri.km : km;
+    const minAff = ri ? ri.min : (km != null ? Math.max(1, Math.round(km/TRACK_SPEED_KMH*60)) : null);
+    distEl.textContent = distText(kmAff);
+    etaEl.textContent = minAff == null ? '—' : (minAff < 60 ? `${minAff} min` : `${Math.floor(minAff/60)} h ${String(minAff%60).padStart(2,'0')}`);
 
     const now = Date.now();
     const line = (label, pos, self) => {
@@ -3294,7 +3385,7 @@ function openTrackingModal(resId){
     infoEl.innerHTML =
       line('🚌 Chauffeur', bus, role==='chauffeur') +
       line('🧍 Client', cli, role==='client') +
-      (km != null ? `<div style="margin-top:6px;color:var(--night);">Arrivée estimée du bus vers <b>${new Date(Date.now() + Math.max(1, Math.round(km/TRACK_SPEED_KMH*60))*60000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</b></div>` : '');
+      (minAff != null ? `<div style="margin-top:6px;color:var(--night);">Arrivée estimée du bus vers <b>${new Date(Date.now() + minAff*60000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</b>${ri ? ' <span style="color:var(--ink-soft);">(par la route)</span>' : ''}</div>` : '');
 
     if(!trackMap || !window.L) return;
     const pts = [];
@@ -3305,9 +3396,29 @@ function openTrackingModal(resId){
       if(trackMarkers[key]) trackMarkers[key].setLatLng(ll);
       else trackMarkers[key] = L.marker(ll, {icon: icon(emoji, color)}).addTo(trackMap);
     });
+    // Trainee : les dernieres positions du bus, pour voir sa progression
+    if(bus){
+      const last = trackTrailPts[trackTrailPts.length-1];
+      if(!last || last[0] !== bus.lat || last[1] !== bus.lng){
+        trackTrailPts.push([bus.lat, bus.lng]);
+        if(trackTrailPts.length > 60) trackTrailPts.shift();
+      }
+      if(trackTrailPts.length > 1){
+        if(trackTrail) trackTrail.setLatLngs(trackTrailPts);
+        else trackTrail = L.polyline(trackTrailPts, {color:'#0B3D24', weight:3, opacity:.5}).addTo(trackMap);
+      }
+    }
     if(pts.length === 2){
       if(trackLine) trackLine.setLatLngs(pts);
-      else trackLine = L.polyline(pts, {color:'#D4A017', weight:4, dashArray:'8 8'}).addTo(trackMap);
+      else trackLine = L.polyline(pts, {color:'#D4A017', weight:3, dashArray:'6 8', opacity:.7}).addTo(trackMap);
+      // Trace routiere reelle (rafraichie toutes les 30 s)
+      fetchRoute(bus, cli).then(info=>{
+        if(!trackMap || !info || !info.coords) return;
+        if(trackRoute) trackRoute.setLatLngs(info.coords);
+        else trackRoute = L.polyline(info.coords, {color:'#C1272D', weight:5, opacity:.75}).addTo(trackMap);
+        const distEl2 = document.getElementById('trackDist');
+        if(distEl2) paint();
+      });
       trackMap.fitBounds(pts, {padding:[45,45], maxZoom:15});
     } else if(pts.length === 1){
       trackMap.setView(pts[0], 14);
@@ -3325,6 +3436,44 @@ function openTrackingModal(resId){
   trackTick = setInterval(paint, 5000);
   paint();
 }
+
+/* ---- Badge "où est le bus ?" directement sur la carte de réservation ----
+   On écoute le doc suivi/{resId} de chaque réservation affichée et on
+   met à jour un petit texte : distance + heure d'arrivée estimée. */
+const liveEtaSubs = {};
+const liveEtaData = {};
+function paintLiveEta(){
+  document.querySelectorAll('[data-live-eta]').forEach(el=>{
+    const id = el.dataset.liveEta;
+    const d = liveEtaData[id];
+    const bus = d && d.chauffeurPos, cli = d && d.clientPos;
+    if(!bus){ el.innerHTML = "📍 Chauffeur pas encore localisé — le suivi démarre quand il ouvre la carte."; return; }
+    const stale = (Date.now() - (bus.ts||0)) > TRACK_STALE_MS;
+    const km = haversineKm(bus, cli);
+    const min = km != null ? Math.max(1, Math.round(km/TRACK_SPEED_KMH*60)) : null;
+    el.innerHTML = stale
+      ? `📍 Dernier signal du chauffeur il y a ${Math.round((Date.now()-(bus.ts||0))/60000)} min${km!=null?` — à ${distText(km)}`:''}`
+      : `🚌 Chauffeur <b style="color:var(--forest);">en direct</b>${km!=null?` — à <b>${distText(km)}</b> de toi` : ''}`
+        + (min!=null ? ` • arrivée estimée vers <b>${new Date(Date.now()+min*60000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</b>` : '')
+        + (bus.vitesse != null ? ` • ${bus.vitesse} km/h` : '');
+  });
+}
+function syncLiveEtaSubs(){
+  const ids = Array.from(document.querySelectorAll('[data-live-eta]')).map(el=>el.dataset.liveEta);
+  ids.forEach(id=>{
+    if(liveEtaSubs[id]) return;
+    liveEtaSubs[id] = db.collection('suivi').doc(id).onSnapshot(snap=>{
+      liveEtaData[id] = snap.exists ? snap.data() : null;
+      paintLiveEta();
+    }, ()=>{});
+  });
+  Object.keys(liveEtaSubs).forEach(id=>{
+    if(!ids.includes(id)){ liveEtaSubs[id](); delete liveEtaSubs[id]; delete liveEtaData[id]; }
+  });
+  paintLiveEta();
+}
+setInterval(syncLiveEtaSubs, 4000);
+setInterval(paintLiveEta, 15000);
 
 /* Ouverture via delegation (les cartes sont re-rendues en permanence). */
 document.addEventListener('click', e=>{
