@@ -63,7 +63,11 @@ app.post("/api/create-payment", verifyAuth, async (req, res) => {
         ipn_url: `${APP_BASE_URL}/api/ipn`,
         success_url: `${APP_BASE_URL}/payment-success`,
         cancel_url: `${APP_BASE_URL}/payment-cancel`,
-        custom_field: JSON.stringify({ uid: req.uid }),
+        // uid ET amount stockes ici : le webhook IPN ne peut PAS faire
+        // confiance a item_price renvoye par PayTech pour le montant a
+        // crediter (voir /api/ipn), donc on fige le montant ici, cote
+        // serveur, au moment ou ON initie le paiement.
+        custom_field: JSON.stringify({ uid: req.uid, amount }),
       }),
     });
 
@@ -91,7 +95,7 @@ app.post("/api/create-payment", verifyAuth, async (req, res) => {
 // 2. IPN PayTech (webhook, pas d'authentification client)
 app.post("/api/ipn", async (req, res) => {
   try {
-    const { type_event, ref_command, item_price, custom_field, api_key_sha256, api_secret_sha256 } = req.body;
+    const { type_event, ref_command, custom_field, api_key_sha256, api_secret_sha256 } = req.body;
 
     const expectedKeyHash = crypto.createHash("sha256").update(PAYTECH_API_KEY).digest("hex");
     const expectedSecretHash = crypto.createHash("sha256").update(PAYTECH_API_SECRET).digest("hex");
@@ -104,18 +108,54 @@ app.post("/api/ipn", async (req, res) => {
     if (!ref_command) return res.status(400).send("ref_command manquant");
 
     const paymentRef = db.collection("payments").doc(ref_command);
+    const paymentSnap = await paymentRef.get();
+    if (!paymentSnap.exists) {
+      console.error("IPN reçu pour un paiement inconnu :", ref_command);
+      return res.status(404).send("Paiement introuvable");
+    }
     const custom = custom_field ? JSON.parse(custom_field) : {};
+    // On ne fait JAMAIS confiance a un montant venu du corps de la requete
+    // IPN : on recredite le montant qu'ON a nous-meme enregistre au moment
+    // de la creation du paiement (payments/{ref_command}.amount), pas
+    // item_price ni custom_field.amount qui pourraient etre falsifies.
+    const amount = Number(paymentSnap.data().amount || 0);
 
     if (type_event === "sale_complete") {
+      // Idempotence : si ce paiement a deja ete marque "completed" (IPN
+      // rejoue par PayTech, retard reseau...), on ne recredite pas deux fois.
+      if (paymentSnap.data().status === "completed") {
+        return res.status(200).send("OK (déjà traité)");
+      }
       await paymentRef.update({ status: "completed", completedAt: admin.firestore.FieldValue.serverTimestamp() });
-      if (custom.uid) {
+      if (custom.uid && amount > 0) {
+        // BUG CORRIGÉ : l'app lit/affiche le champ "solde", pas "walletBalance".
+        // L'ancien code créditait un champ que personne ne lisait jamais.
         await db.collection("users").doc(custom.uid).set(
-          { walletBalance: admin.firestore.FieldValue.increment(Number(item_price)) },
+          { solde: admin.firestore.FieldValue.increment(amount) },
           { merge: true }
         );
+        // Historique de recharge, lu par le client dans son portefeuille
+        // (collection "rechargements", absente jusqu'ici -> historique
+        // toujours vide).
+        await db.collection("rechargements").add({
+          clientId: custom.uid,
+          montant: amount,
+          statut: "validee",
+          refCommand: ref_command,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       }
     } else if (type_event === "sale_canceled") {
       await paymentRef.update({ status: "canceled", canceledAt: admin.firestore.FieldValue.serverTimestamp() });
+      if (custom.uid && amount > 0) {
+        await db.collection("rechargements").add({
+          clientId: custom.uid,
+          montant: amount,
+          statut: "echouee",
+          refCommand: ref_command,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
     }
 
     return res.status(200).send("OK");
@@ -172,6 +212,7 @@ app.post("/api/pay-from-wallet", verifyAuth, async (req, res) => {
           commission: prop.commission,
           montantChauffeur: prop.prixPropose,
           paiementStatut: "paye",
+          propositionId: id,
         });
         transaction.update(propRef, { statut: "acceptee" });
       } else if (type === "trajet") {
@@ -208,6 +249,7 @@ app.post("/api/pay-from-wallet", verifyAuth, async (req, res) => {
           commission: trajet.commission,
           montantChauffeur: trajet.prixPropose,
           paiementStatut: "paye",
+          trajetId: id,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
         transaction.update(userRef, { solde: currentBalance - prix });
@@ -220,6 +262,65 @@ app.post("/api/pay-from-wallet", verifyAuth, async (req, res) => {
     return res.json({ success: true });
   } catch (error) {
     console.error("Erreur pay-from-wallet:", error);
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+// 4. Scan du billet QR par le chauffeur -> valide l'embarquement ET verse
+//    sa part (montantChauffeur) sur son solde, en une seule transaction.
+//    C'est CE endpoint qui garantit que l'argent du client ne va jamais
+//    directement au chauffeur : il reste "en attente" sur la reservation
+//    jusqu'a ce scan.
+app.post("/api/scan-embarquement", verifyAuth, async (req, res) => {
+  const { resId, token } = req.body;
+  const uid = req.uid;
+
+  if (!resId || !token) {
+    return res.status(400).json({ error: "resId et token sont requis." });
+  }
+
+  try {
+    let credited = 0;
+
+    await db.runTransaction(async (transaction) => {
+      const resRef = db.collection("reservations").doc(resId);
+      const resDoc = await transaction.get(resRef);
+      if (!resDoc.exists) throw new Error("Réservation introuvable.");
+      const data = resDoc.data();
+
+      if (data.chauffeurId !== uid) {
+        throw new Error("Tu n'es pas le chauffeur assigné à cette réservation.");
+      }
+      if (data.qrToken !== token) {
+        throw new Error("Billet invalide.");
+      }
+      if (data.embarquementValide) {
+        throw new Error("Ce billet a déjà été scanné.");
+      }
+
+      const updatePayload = {
+        embarquementValide: true,
+        embarquementAt: admin.firestore.FieldValue.serverTimestamp(),
+        embarquementPar: uid,
+      };
+
+      const part = Number(data.montantChauffeur || 0);
+      const dejaVerse = !!data.paiementChauffeurVerse;
+
+      if (!dejaVerse && part > 0) {
+        updatePayload.paiementChauffeurVerse = true;
+        transaction.update(db.collection("users").doc(uid), {
+          solde: admin.firestore.FieldValue.increment(part),
+        });
+        credited = part;
+      }
+
+      transaction.update(resRef, updatePayload);
+    });
+
+    return res.json({ success: true, credited });
+  } catch (error) {
+    console.error("Erreur scan-embarquement:", error);
     return res.status(400).json({ error: error.message });
   }
 });
